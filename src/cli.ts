@@ -13,6 +13,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { startServer, DEFAULT_PORT } from "./server.js";
 import { installHooks, uninstallHooks, getHookStatus } from "./install.js";
+import { importTranscripts, listTranscripts, watchTranscripts, CLAUDE_PROJECTS_DIR } from "./importer.js";
 
 const program = new Command();
 
@@ -81,10 +82,33 @@ program
       console.log(chalk.green("  ✓ Claude Code hooks are installed") + "\n");
     }
 
+    // Auto-import existing transcripts on startup
+    console.log(chalk.dim("  Scanning ~/.claude/projects/ for existing sessions…"));
+    try {
+      const stats = importTranscripts({ onProgress: () => {} });
+      if (stats.imported > 0) {
+        console.log(
+          chalk.green(`  ✓ Imported ${stats.imported} historical session${stats.imported !== 1 ? "s" : ""}`) +
+            chalk.dim(` (${stats.skipped} already up-to-date)`)
+        );
+      } else {
+        console.log(chalk.dim(`  ↳ ${stats.skipped} sessions already up-to-date, ${stats.scanned} scanned`));
+      }
+    } catch {
+      console.log(chalk.dim("  ↳ No Claude Code transcripts found."));
+    }
+    console.log();
+
+    // Start watching transcripts for new/updated sessions
+    const stopWatcher = watchTranscripts((sessionId) => {
+      console.log(chalk.dim(`  [watcher] Session updated: ${sessionId.slice(0, 8)}…`));
+    });
+    console.log(chalk.dim(`  Watching: ${CLAUDE_PROJECTS_DIR}`));
     console.log(chalk.dim("  Press Ctrl+C to stop.\n"));
 
     // Keep process alive
     process.on("SIGINT", () => {
+      stopWatcher();
       console.log(chalk.dim("\n  AgentLens stopped.\n"));
       process.exit(0);
     });
@@ -124,6 +148,81 @@ program
     const { settingsPath } = uninstallHooks();
     console.log(chalk.green("  ✓ Hooks removed"));
     console.log(chalk.dim(`  Settings: ${settingsPath}\n`));
+  });
+
+// ─── import ───────────────────────────────────────────────────────────────────
+
+program
+  .command("import")
+  .description("Import all historical Claude Code sessions from ~/.claude/projects/")
+  .option("-f, --force", "Re-import sessions already in the database", false)
+  .action((opts: { force: boolean }) => {
+    printBanner();
+    console.log(chalk.dim(`  Scanning ${CLAUDE_PROJECTS_DIR}…\n`));
+
+    const stats = importTranscripts({
+      force: opts.force,
+      onProgress: (msg) => console.log(chalk.dim(`    ${msg}`)),
+    });
+
+    console.log();
+    console.log(chalk.bold("  Import complete"));
+    console.log(`  ${chalk.green(String(stats.imported))} sessions imported`);
+    console.log(`  ${chalk.dim(String(stats.skipped))} sessions skipped (already up-to-date)`);
+    console.log(`  ${chalk.dim(String(stats.scanned))} transcript files scanned`);
+    if (stats.errors > 0) {
+      console.log(`  ${chalk.red(String(stats.errors))} errors`);
+    }
+    console.log();
+  });
+
+// ─── transcripts ──────────────────────────────────────────────────────────────
+
+program
+  .command("transcripts")
+  .description("List available Claude Code transcript files")
+  .action(() => {
+    printBanner();
+    const list = listTranscripts();
+
+    if (list.length === 0) {
+      console.log(
+        chalk.dim(`  No transcripts found at ${CLAUDE_PROJECTS_DIR}\n`) +
+          chalk.dim("  Run Claude Code at least once to generate sessions.\n")
+      );
+      return;
+    }
+
+    const imported = list.filter((t) => t.alreadyImported).length;
+    const pending = list.length - imported;
+
+    console.log(`  ${chalk.bold(String(list.length))} transcript${list.length !== 1 ? "s" : ""} found`);
+    console.log(
+      `  ${chalk.green(String(imported))} imported  ·  ${chalk.yellow(String(pending))} pending import\n`
+    );
+
+    for (const t of list.slice(0, 30)) {
+      const age = Math.floor((Date.now() - t.modifiedAt) / 1000 / 60);
+      const ageStr = age < 60 ? `${age}m ago` : `${Math.floor(age / 60)}h ago`;
+      const status = t.alreadyImported ? chalk.green("✓") : chalk.yellow("○");
+      const kb = Math.round(t.sizeBytes / 1024);
+
+      console.log(
+        `  ${status}  ${t.sessionId.slice(0, 8)}…  ${chalk.dim(t.cwd.slice(0, 40))}  ${chalk.dim(`${kb}KB  ${ageStr}`)}`
+      );
+    }
+
+    if (list.length > 30) {
+      console.log(chalk.dim(`\n  … and ${list.length - 30} more`));
+    }
+
+    if (pending > 0) {
+      console.log(
+        chalk.dim(`\n  Run: `) + chalk.cyan("agentlens import") + chalk.dim(" to import pending sessions.\n")
+      );
+    } else {
+      console.log();
+    }
   });
 
 // ─── status ───────────────────────────────────────────────────────────────────

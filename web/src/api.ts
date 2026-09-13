@@ -68,3 +68,35 @@ export async function deleteSession(id: string): Promise<void> {
 export async function getHealth(): Promise<{ status: string }> {
   return apiFetch<{ status: string }>("/health");
 }
+
+// ─── Import API ───────────────────────────────────────────────────────────────
+
+export interface TranscriptInfo {
+  sessionId: string;
+  projectDir: string;
+  cwd: string;
+  filePath: string;
+  sizeBytes: number;
+  modifiedAt: number;
+  alreadyImported: boolean;
+}
+
+export interface ImportStats {
+  scanned: number;
+  imported: number;
+  skipped: number;
+  errors: number;
+  sessions: Array<{ id: string; task?: string; events: number }>;
+}
+
+export async function listTranscripts(): Promise<{ transcripts: TranscriptInfo[] }> {
+  return apiFetch<{ transcripts: TranscriptInfo[] }>("/import/transcripts");
+}
+
+export async function runImport(force = false): Promise<{ ok: boolean; stats: ImportStats }> {
+  return apiFetch<{ ok: boolean; stats: ImportStats }>("/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force }),
+  });
+}

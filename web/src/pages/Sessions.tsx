@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
-import { getSessions, deleteSession, type Session } from "../api.ts";
+import { getSessions, deleteSession, listTranscripts, runImport, type Session, type TranscriptInfo, type ImportStats } from "../api.ts";
 import "./Sessions.css";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -149,6 +149,116 @@ function Stat({
   );
 }
 
+// ─── Import panel ─────────────────────────────────────────────────────────────
+
+function ImportPanel({ onImported }: { onImported: () => void }) {
+  const [transcripts, setTranscripts] = useState<TranscriptInfo[] | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [lastStats, setLastStats] = useState<ImportStats | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await listTranscripts();
+      setTranscripts(data.transcripts);
+    } catch {
+      setTranscripts([]);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const pending = transcripts?.filter((t) => !t.alreadyImported) ?? [];
+  const imported = transcripts?.filter((t) => t.alreadyImported) ?? [];
+
+  const handleImport = async (force = false) => {
+    setImporting(true);
+    try {
+      const result = await runImport(force);
+      setLastStats(result.stats);
+      await load();
+      onImported();
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  if (!transcripts) return null;
+  if (transcripts.length === 0) return null;
+
+  return (
+    <div className="import-panel">
+      <div className="import-panel__header" onClick={() => setExpanded((v) => !v)}>
+        <div className="import-panel__info">
+          <span className="import-panel__icon">⤓</span>
+          <span className="import-panel__title">
+            {pending.length > 0
+              ? `${pending.length} session${pending.length !== 1 ? "s" : ""} available to import`
+              : `${imported.length} sessions imported from transcripts`}
+          </span>
+          {pending.length > 0 && (
+            <span className="import-panel__sub">from ~/.claude/projects/</span>
+          )}
+        </div>
+        <div className="import-panel__actions" onClick={(e) => e.stopPropagation()}>
+          {lastStats && (
+            <span className="import-panel__result">
+              {lastStats.imported > 0
+                ? `✓ ${lastStats.imported} imported`
+                : "Already up-to-date"}
+            </span>
+          )}
+          {pending.length > 0 && (
+            <button
+              className="btn btn--primary"
+              onClick={() => void handleImport(false)}
+              disabled={importing}
+            >
+              {importing ? "Importing…" : `Import ${pending.length} session${pending.length !== 1 ? "s" : ""}`}
+            </button>
+          )}
+          {imported.length > 0 && (
+            <button
+              className="btn btn--ghost"
+              onClick={() => void handleImport(true)}
+              disabled={importing}
+              title="Re-import all transcripts (overwrites existing)"
+            >
+              ↺ Re-import all
+            </button>
+          )}
+          <button className="btn btn--ghost import-panel__toggle" aria-label="Toggle details">
+            {expanded ? "▲" : "▼"}
+          </button>
+        </div>
+      </div>
+
+      {expanded && transcripts.length > 0 && (
+        <div className="import-panel__list">
+          {transcripts.slice(0, 20).map((t) => {
+            const age = Math.floor((Date.now() - t.modifiedAt) / 1000 / 60);
+            const ageStr = age < 60 ? `${age}m ago` : age < 1440 ? `${Math.floor(age / 60)}h ago` : `${Math.floor(age / 1440)}d ago`;
+            const kb = Math.round(t.sizeBytes / 1024);
+            return (
+              <div key={t.sessionId} className="import-panel__item">
+                <span className={`import-panel__item-status ${t.alreadyImported ? "import-panel__item-status--done" : "import-panel__item-status--pending"}`}>
+                  {t.alreadyImported ? "✓" : "○"}
+                </span>
+                <span className="import-panel__item-id">{t.sessionId.slice(0, 8)}…</span>
+                <span className="import-panel__item-cwd">{t.cwd.replace(/^\/Users\/[^/]+/, "~")}</span>
+                <span className="import-panel__item-meta">{kb}KB · {ageStr}</span>
+              </div>
+            );
+          })}
+          {transcripts.length > 20 && (
+            <div className="import-panel__more">…and {transcripts.length - 20} more files</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
 function EmptyState() {
@@ -263,6 +373,9 @@ export default function SessionsPage() {
       </header>
 
       <div className="sessions-page__body">
+        {/* Import panel — always shown so users can backfill historical sessions */}
+        <ImportPanel onImported={() => setLastRefresh(Date.now())} />
+
         {/* Summary strip */}
         {sessions.length > 0 && (
           <div className="summary-strip">

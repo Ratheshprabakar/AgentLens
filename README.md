@@ -23,12 +23,12 @@ Now run Claude Code as usual. Each session is automatically recorded and appears
 
 ## CLI commands
 
-| Command | Description |
-|---|---|
-| `agentlens start` | Start collector + open dashboard |
-| `agentlens install` | Install Claude Code hooks |
-| `agentlens uninstall` | Remove hooks |
-| `agentlens status` | Show hook status |
+| Command               | Description                      |
+| --------------------- | -------------------------------- |
+| `agentlens start`     | Start collector + open dashboard |
+| `agentlens install`   | Install Claude Code hooks        |
+| `agentlens uninstall` | Remove hooks                     |
+| `agentlens status`    | Show hook status                 |
 
 ## How it works
 
@@ -89,14 +89,14 @@ Sessions are stored at `~/.agentlens/agentlens.db` (SQLite). Nothing leaves your
 
 ## Roadmap
 
-| Version | Feature |
-|---|---|
-| **V0.1** ✓ | Claude Code timeline — this release |
-| V0.2 | AI session analysis (retry loops, exploration overhead) |
-| V0.3 | Cursor integration |
-| V0.4 | Session comparison |
-| V1 | Team observability (opt-in cloud) |
+| Version    | Feature                                                 |
+| ---------- | ------------------------------------------------------- |
+| **V0.1** ✓ | Claude Code timeline — this release                     |
+| V0.2       | AI session analysis (retry loops, exploration overhead) |
+| V0.3       | Cursor integration                                      |
+| V0.4       | Session comparison                                      |
+| V1         | Team observability (opt-in cloud)                       |
 
 ---
 
-*AgentLens v0.1 — Concept / Validation*
+_AgentLens v0.1 — Concept / Validation_

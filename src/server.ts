@@ -14,6 +14,7 @@ import {
   deleteSession,
 } from "./db.js";
 import { normalizeClaude } from "./normalize.js";
+import { importTranscripts, listTranscripts, watchTranscripts } from "./importer.js";
 import type { AgentEvent, IngestPayload } from "./types.js";
 import { randomUUID } from "crypto";
 
@@ -123,6 +124,36 @@ export function createApp(opts: { dev?: boolean } = {}): express.Application {
     }
   });
 
+  // ── Import endpoints ────────────────────────────────────────────────────
+
+  /**
+   * GET /api/import/transcripts
+   * Lists available Claude Code transcript files.
+   */
+  api.get("/import/transcripts", (_req: Request, res: Response) => {
+    try {
+      const list = listTranscripts();
+      res.json({ transcripts: list });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  /**
+   * POST /api/import
+   * Import (or re-import) all Claude Code transcripts.
+   * Body: { force?: boolean }
+   */
+  api.post("/import", (req: Request, res: Response) => {
+    try {
+      const { force = false } = req.body as { force?: boolean };
+      const stats = importTranscripts({ force });
+      res.json({ ok: true, stats });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   /**
    * POST /api/sessions/:id/end
    * Allows the hook to mark a session as ended.
@@ -178,9 +209,17 @@ export async function startServer(opts: { port?: number; dev?: boolean } = {}): 
 
   return new Promise((resolve, reject) => {
     const server = app.listen(port, "127.0.0.1", () => {
+      // Start transcript watcher so sessions captured without hooks also appear
+      const stopWatcher = watchTranscripts(() => {
+        // Session updated — clients will pick it up on next poll
+      });
+
       resolve({
         port,
-        close: () => server.close(),
+        close: () => {
+          stopWatcher();
+          server.close();
+        },
       });
     });
     server.on("error", reject);
