@@ -1,34 +1,51 @@
 /**
- * AgentLens local database layer.
- * Uses the built-in node:sqlite module (available since Node 22.5).
- * No native compilation required.
+ * AgentLens database layer — PostgreSQL via node-postgres (pg).
+ *
+ * Connection is configured via the DATABASE_URL environment variable:
+ *   postgresql://user:password@host:5432/agentlens
+ *
+ * Falls back to a SQLite-compatible URL for local dev without Docker
+ * (not used — PostgreSQL is always required in Docker).
  */
 
-import { DatabaseSync, StatementSync } from "node:sqlite";
-import { join } from "path";
-import { homedir } from "os";
-import { mkdirSync } from "fs";
+import { Pool, type PoolClient } from "pg";
 import type { AgentEvent, Session, SessionStatus, SessionSummary } from "./types.js";
 
-// ─── Database path ────────────────────────────────────────────────────────────
+// ─── Connection pool ──────────────────────────────────────────────────────────
 
-const DATA_DIR = join(homedir(), ".agentlens");
-export const DB_PATH = join(DATA_DIR, "agentlens.db");
+const DATABASE_URL =
+  process.env.DATABASE_URL ??
+  "postgresql://agentlens:agentlens@localhost:5432/agentlens";
+
+let _pool: Pool | null = null;
+
+export function getPool(): Pool {
+  if (!_pool) {
+    _pool = new Pool({
+      connectionString: DATABASE_URL,
+      max: 10,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+    });
+
+    _pool.on("error", (err) => {
+      console.error("[agentlens] pg pool error:", err.message);
+    });
+  }
+  return _pool;
+}
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
-const SCHEMA = `
-  PRAGMA journal_mode=WAL;
-  PRAGMA foreign_keys=ON;
-
+const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS sessions (
     id          TEXT    PRIMARY KEY,
     agent       TEXT    NOT NULL DEFAULT 'claude-code',
     model       TEXT,
     task        TEXT,
     cwd         TEXT,
-    start_time  INTEGER NOT NULL,
-    end_time    INTEGER,
+    start_time  BIGINT  NOT NULL,
+    end_time    BIGINT,
     status      TEXT    NOT NULL DEFAULT 'running',
     event_count INTEGER NOT NULL DEFAULT 0,
     file_reads  INTEGER NOT NULL DEFAULT 0,
@@ -39,11 +56,11 @@ const SCHEMA = `
   );
 
   CREATE TABLE IF NOT EXISTS events (
-    id           TEXT    PRIMARY KEY,
-    session_id   TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    agent        TEXT    NOT NULL DEFAULT 'claude-code',
-    timestamp    INTEGER NOT NULL,
-    type         TEXT    NOT NULL,
+    id           TEXT     PRIMARY KEY,
+    session_id   TEXT     NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    agent        TEXT     NOT NULL DEFAULT 'claude-code',
+    timestamp    BIGINT   NOT NULL,
+    type         TEXT     NOT NULL,
     tool         TEXT,
     command      TEXT,
     exit_code    INTEGER,
@@ -54,9 +71,9 @@ const SCHEMA = `
     query        TEXT,
     result_count INTEGER,
     duration     INTEGER,
-    success      INTEGER,
+    success      BOOLEAN,
     content      TEXT,
-    metadata     TEXT
+    metadata     JSONB
   );
 
   CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id);
@@ -64,29 +81,41 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_sessions_start    ON sessions(start_time DESC);
 `;
 
-// ─── DB singleton ─────────────────────────────────────────────────────────────
-
-let _db: DatabaseSync | null = null;
-
-export function getDB(): DatabaseSync {
-  if (_db) return _db;
-
-  mkdirSync(DATA_DIR, { recursive: true });
-  _db = new DatabaseSync(DB_PATH);
-  _db.exec(SCHEMA);
-  return _db;
+/**
+ * Run the schema migrations. Called once on startup — idempotent.
+ * Retries for up to 30 seconds to handle PostgreSQL cold-start in Docker.
+ */
+export async function initDB(retries = 12, delayMs = 2500): Promise<void> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const pool = getPool();
+      await pool.query(SCHEMA_SQL);
+      console.log("[agentlens] Database ready.");
+      return;
+    } catch (err) {
+      if (attempt === retries) {
+        console.error("[agentlens] Database init failed:", (err as Error).message);
+        throw err;
+      }
+      console.log(
+        `[agentlens] Waiting for PostgreSQL… (attempt ${attempt}/${retries})`
+      );
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
 }
 
-// ─── Row types ────────────────────────────────────────────────────────────────
+// ─── Row → domain types ───────────────────────────────────────────────────────
 
+// pg returns column names in lowercase — matches our snake_case schema
 interface SessionRow {
   id: string;
   agent: string;
   model: string | null;
   task: string | null;
   cwd: string | null;
-  start_time: number;
-  end_time: number | null;
+  start_time: string; // pg returns BIGINT as string
+  end_time: string | null;
   status: string;
   event_count: number;
   file_reads: number;
@@ -100,7 +129,7 @@ interface EventRow {
   id: string;
   session_id: string;
   agent: string;
-  timestamp: number;
+  timestamp: string; // BIGINT → string from pg
   type: string;
   tool: string | null;
   command: string | null;
@@ -112,22 +141,22 @@ interface EventRow {
   query: string | null;
   result_count: number | null;
   duration: number | null;
-  success: number | null;
+  success: boolean | null;
   content: string | null;
-  metadata: string | null;
+  metadata: Record<string, unknown> | null; // JSONB — pg parses it automatically
 }
 
-// ─── Converters ───────────────────────────────────────────────────────────────
-
 function rowToSession(row: SessionRow): SessionSummary {
+  const startTime = Number(row.start_time);
+  const endTime = row.end_time != null ? Number(row.end_time) : undefined;
   return {
     id: row.id,
     agent: row.agent,
     model: row.model ?? undefined,
     task: row.task ?? undefined,
     cwd: row.cwd ?? undefined,
-    startTime: row.start_time,
-    endTime: row.end_time ?? undefined,
+    startTime,
+    endTime,
     status: row.status as SessionStatus,
     eventCount: row.event_count,
     fileReads: row.file_reads,
@@ -135,7 +164,7 @@ function rowToSession(row: SessionRow): SessionSummary {
     shellCommands: row.shell_cmds,
     searches: row.searches,
     errors: row.errors,
-    duration: row.end_time != null ? row.end_time - row.start_time : undefined,
+    duration: endTime != null ? endTime - startTime : undefined,
   };
 }
 
@@ -144,7 +173,7 @@ function rowToEvent(row: EventRow): AgentEvent {
     id: row.id,
     sessionId: row.session_id,
     agent: row.agent,
-    timestamp: row.timestamp,
+    timestamp: Number(row.timestamp),
     type: row.type as AgentEvent["type"],
     tool: row.tool ?? undefined,
     command: row.command ?? undefined,
@@ -156,133 +185,156 @@ function rowToEvent(row: EventRow): AgentEvent {
     query: row.query ?? undefined,
     resultCount: row.result_count ?? undefined,
     duration: row.duration ?? undefined,
-    success: row.success != null ? Boolean(row.success) : undefined,
+    success: row.success ?? undefined,
     content: row.content ?? undefined,
-    metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : undefined,
+    metadata: row.metadata ?? undefined,
   };
-}
-
-// ─── Statement cache ──────────────────────────────────────────────────────────
-// Caching prepared statements avoids re-parsing on every call.
-
-const stmtCache = new Map<string, StatementSync>();
-
-function stmt(sql: string): StatementSync {
-  let s = stmtCache.get(sql);
-  if (!s) {
-    s = getDB().prepare(sql);
-    stmtCache.set(sql, s);
-  }
-  return s;
 }
 
 // ─── Session operations ───────────────────────────────────────────────────────
 
-export function upsertSession(
+export async function upsertSession(
   partial: Partial<Session> & { id: string; startTime: number }
-): void {
-  stmt(`
-    INSERT INTO sessions (id, agent, model, task, cwd, start_time, status)
-    VALUES (?, ?, ?, ?, ?, ?, 'running')
-    ON CONFLICT(id) DO NOTHING
-  `).run(
-    partial.id,
-    partial.agent ?? "claude-code",
-    partial.model ?? null,
-    partial.task ?? null,
-    partial.cwd ?? null,
-    partial.startTime
+): Promise<void> {
+  await getPool().query(
+    `INSERT INTO sessions (id, agent, model, task, cwd, start_time, status)
+     VALUES ($1, $2, $3, $4, $5, $6, 'running')
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      partial.id,
+      partial.agent ?? "claude-code",
+      partial.model ?? null,
+      partial.task ?? null,
+      partial.cwd ?? null,
+      partial.startTime,
+    ]
   );
 }
 
-export function endSession(id: string, status: SessionStatus): void {
-  stmt(`UPDATE sessions SET end_time = ?, status = ? WHERE id = ?`).run(
-    Date.now(),
-    status,
-    id
+export async function endSession(id: string, status: SessionStatus): Promise<void> {
+  await getPool().query(
+    `UPDATE sessions SET end_time = $1, status = $2 WHERE id = $3`,
+    [Date.now(), status, id]
   );
 }
 
-export function updateSessionCounts(sessionId: string, type: string): void {
-  const countField = (() => {
-    switch (type) {
-      case "file_read": return "file_reads";
-      case "file_edit": return "file_edits";
-      case "shell":
-      case "test_run": return "shell_cmds";
-      case "search":   return "searches";
-      case "error":    return "errors";
-      default:         return null;
-    }
-  })();
-
-  if (countField) {
-    // Can't cache these dynamically-named queries — use exec via getDB
-    getDB().exec(
-      `UPDATE sessions SET event_count = event_count + 1, ${countField} = ${countField} + 1 WHERE id = '${sessionId.replace(/'/g, "''")}'`
-    );
-  } else {
-    stmt(`UPDATE sessions SET event_count = event_count + 1 WHERE id = ?`).run(sessionId);
-  }
+export async function updateSessionCounts(sessionId: string, type: string): Promise<void> {
+  // Use a single CASE-based UPDATE — safe, no dynamic SQL
+  await getPool().query(
+    `UPDATE sessions SET
+       event_count = event_count + 1,
+       file_reads  = file_reads  + CASE WHEN $1 = 'file_read'              THEN 1 ELSE 0 END,
+       file_edits  = file_edits  + CASE WHEN $1 = 'file_edit'              THEN 1 ELSE 0 END,
+       shell_cmds  = shell_cmds  + CASE WHEN $1 IN ('shell', 'test_run')   THEN 1 ELSE 0 END,
+       searches    = searches    + CASE WHEN $1 = 'search'                 THEN 1 ELSE 0 END,
+       errors      = errors      + CASE WHEN $1 = 'error'                  THEN 1 ELSE 0 END
+     WHERE id = $2`,
+    [type, sessionId]
+  );
 }
 
-export function setSessionTask(sessionId: string, task: string): void {
-  stmt(`UPDATE sessions SET task = ? WHERE id = ? AND task IS NULL`).run(task, sessionId);
+export async function setSessionTask(sessionId: string, task: string): Promise<void> {
+  await getPool().query(
+    `UPDATE sessions SET task = $1 WHERE id = $2 AND task IS NULL`,
+    [task, sessionId]
+  );
 }
 
-export function getAllSessions(limit = 200): SessionSummary[] {
-  const rows = stmt(`SELECT * FROM sessions ORDER BY start_time DESC LIMIT ?`)
-    .all(limit) as unknown as SessionRow[];
-  return rows.map(rowToSession);
+export async function getAllSessions(limit = 200): Promise<SessionSummary[]> {
+  const result = await getPool().query<SessionRow>(
+    `SELECT * FROM sessions ORDER BY start_time DESC LIMIT $1`,
+    [limit]
+  );
+  return result.rows.map(rowToSession);
 }
 
-export function getSessionById(id: string): SessionSummary | undefined {
-  const row = stmt(`SELECT * FROM sessions WHERE id = ?`).get(id) as unknown as SessionRow | undefined;
-  return row ? rowToSession(row) : undefined;
+export async function getSessionById(id: string): Promise<SessionSummary | undefined> {
+  const result = await getPool().query<SessionRow>(
+    `SELECT * FROM sessions WHERE id = $1`,
+    [id]
+  );
+  return result.rows[0] ? rowToSession(result.rows[0]) : undefined;
 }
 
-export function deleteSession(id: string): void {
-  stmt(`DELETE FROM sessions WHERE id = ?`).run(id);
+export async function deleteSession(id: string): Promise<void> {
+  await getPool().query(`DELETE FROM sessions WHERE id = $1`, [id]);
 }
 
 // ─── Event operations ─────────────────────────────────────────────────────────
 
-export function insertEvent(event: AgentEvent): void {
-  // Ensure session row exists first
-  upsertSession({ id: event.sessionId, agent: event.agent, startTime: event.timestamp });
+/**
+ * Insert a single event and increment the parent session counters.
+ * Uses a transaction so counts are always consistent.
+ */
+export async function insertEvent(event: AgentEvent): Promise<void> {
+  const pool = getPool();
+  const client: PoolClient = await pool.connect();
+  try {
+    await client.query("BEGIN");
 
-  stmt(`
-    INSERT OR IGNORE INTO events
-      (id, session_id, agent, timestamp, type, tool, command, exit_code, output,
-       file, additions, deletions, query, result_count, duration, success, content, metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    event.id,
-    event.sessionId,
-    event.agent,
-    event.timestamp,
-    event.type,
-    event.tool ?? null,
-    event.command ?? null,
-    event.exitCode ?? null,
-    event.output ?? null,
-    event.file ?? null,
-    event.additions ?? null,
-    event.deletions ?? null,
-    event.query ?? null,
-    event.resultCount ?? null,
-    event.duration ?? null,
-    event.success != null ? (event.success ? 1 : 0) : null,
-    event.content ?? null,
-    event.metadata ? JSON.stringify(event.metadata) : null
-  );
+    // Ensure session row exists first
+    await client.query(
+      `INSERT INTO sessions (id, agent, start_time, status)
+       VALUES ($1, $2, $3, 'running')
+       ON CONFLICT (id) DO NOTHING`,
+      [event.sessionId, event.agent, event.timestamp]
+    );
 
-  updateSessionCounts(event.sessionId, event.type);
+    // Insert event (ignore duplicates)
+    await client.query(
+      `INSERT INTO events
+         (id, session_id, agent, timestamp, type, tool, command, exit_code, output,
+          file, additions, deletions, query, result_count, duration, success, content, metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        event.id,
+        event.sessionId,
+        event.agent,
+        event.timestamp,
+        event.type,
+        event.tool ?? null,
+        event.command ?? null,
+        event.exitCode ?? null,
+        event.output ?? null,
+        event.file ?? null,
+        event.additions ?? null,
+        event.deletions ?? null,
+        event.query ?? null,
+        event.resultCount ?? null,
+        event.duration ?? null,
+        event.success ?? null,
+        event.content ?? null,
+        event.metadata ? JSON.stringify(event.metadata) : null,
+      ]
+    );
+
+    // Update session counters
+    await client.query(
+      `UPDATE sessions SET
+         event_count = event_count + 1,
+         file_reads  = file_reads  + CASE WHEN $1 = 'file_read'            THEN 1 ELSE 0 END,
+         file_edits  = file_edits  + CASE WHEN $1 = 'file_edit'            THEN 1 ELSE 0 END,
+         shell_cmds  = shell_cmds  + CASE WHEN $1 IN ('shell', 'test_run') THEN 1 ELSE 0 END,
+         searches    = searches    + CASE WHEN $1 = 'search'               THEN 1 ELSE 0 END,
+         errors      = errors      + CASE WHEN $1 = 'error'                THEN 1 ELSE 0 END
+       WHERE id = $2`,
+      [event.type, event.sessionId]
+    );
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
-export function getEventsBySession(sessionId: string): AgentEvent[] {
-  const rows = stmt(
-    `SELECT * FROM events WHERE session_id = ? ORDER BY timestamp ASC`
-  ).all(sessionId) as unknown as EventRow[];
-  return rows.map(rowToEvent);
+export async function getEventsBySession(sessionId: string): Promise<AgentEvent[]> {
+  const result = await getPool().query<EventRow>(
+    `SELECT * FROM events WHERE session_id = $1 ORDER BY timestamp ASC`,
+    [sessionId]
+  );
+  return result.rows.map(rowToEvent);
 }

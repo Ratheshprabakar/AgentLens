@@ -12,10 +12,11 @@ import {
   endSession,
   setSessionTask,
   deleteSession,
+  initDB,
 } from "./db.js";
 import { normalizeClaude } from "./normalize.js";
 import { importTranscripts, listTranscripts, watchTranscripts } from "./importer.js";
-import type { AgentEvent, IngestPayload } from "./types.js";
+import type { AgentEvent } from "./types.js";
 import { randomUUID } from "crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -23,6 +24,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const DEFAULT_PORT = 4040;
+
+// ─── Async route wrapper ──────────────────────────────────────────────────────
+
+/** Wraps an async route handler so unhandled promise rejections reach the error middleware. */
+function asyncRoute(
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
+) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    fn(req, res, next).catch(next);
+  };
+}
 
 // ─── App factory ──────────────────────────────────────────────────────────────
 
@@ -37,155 +49,109 @@ export function createApp(opts: { dev?: boolean } = {}): express.Application {
   const api = express.Router();
 
   // GET /api/health
-  api.get("/health", (_req: Request, res: Response) => {
+  api.get("/health", (_req, res) => {
     res.json({ status: "ok", version: "0.1.0" });
   });
 
   // GET /api/sessions
-  api.get("/sessions", (_req: Request, res: Response) => {
-    try {
-      const sessions = getAllSessions(200);
-      res.json({ sessions });
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
+  api.get("/sessions", asyncRoute(async (_req, res) => {
+    const sessions = await getAllSessions(200);
+    res.json({ sessions });
+  }));
 
   // GET /api/sessions/:id
-  api.get("/sessions/:id", (req: Request, res: Response) => {
-    try {
-      const session = getSessionById(req.params.id);
-      if (!session) {
-        res.status(404).json({ error: "Session not found" });
-        return;
-      }
-      const events = getEventsBySession(req.params.id);
-      res.json({ session, events });
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
+  api.get("/sessions/:id", asyncRoute(async (req, res) => {
+    const session = await getSessionById(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
     }
-  });
+    const events = await getEventsBySession(req.params.id);
+    res.json({ session, events });
+  }));
 
   // DELETE /api/sessions/:id
-  api.delete("/sessions/:id", (req: Request, res: Response) => {
-    try {
-      deleteSession(req.params.id);
-      res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
+  api.delete("/sessions/:id", asyncRoute(async (req, res) => {
+    await deleteSession(req.params.id);
+    res.json({ ok: true });
+  }));
 
   /**
    * POST /api/events
-   * Accepts two formats:
-   *   1. { event: AgentEvent }          — pre-normalized AgentLens event
-   *   2. { hook: ClaudeHookInput }      — raw Claude Code hook payload
-   *   3. Raw Claude hook payload (no wrapper) — sent directly by hook scripts
+   * Three accepted formats:
+   *   1. { event: AgentEvent }      — pre-normalized
+   *   2. Raw Claude hook payload    — normalized server-side
+   *   3. { hook: ClaudeHookInput }  — wrapped Claude hook
    */
-  api.post("/events", (req: Request, res: Response) => {
-    try {
-      const body = req.body as Record<string, unknown>;
-      const eventsToInsert: AgentEvent[] = [];
+  api.post("/events", asyncRoute(async (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    const eventsToInsert: AgentEvent[] = [];
 
-      if (body.event) {
-        // Format 1: pre-normalized
-        const event = body.event as AgentEvent;
-        if (!event.id) event.id = randomUUID();
-        eventsToInsert.push(event);
-      } else if (body.hook_event_name) {
-        // Format 3: raw Claude hook (no wrapper)
-        const normalized = normalizeClaude(body);
-        eventsToInsert.push(...normalized);
+    if (body.event) {
+      const event = body.event as AgentEvent;
+      if (!event.id) event.id = randomUUID();
+      eventsToInsert.push(event);
+    } else if (body.hook_event_name) {
+      // Raw Claude hook (stdin → POST)
+      const normalized = normalizeClaude(body);
+      eventsToInsert.push(...normalized);
 
-        // Handle session end marker
-        if (body.hook_event_name === "Stop" && typeof body.session_id === "string") {
-          endSession(body.session_id, "success");
-        }
-      } else if (body.hook) {
-        // Format 2: wrapped Claude hook
-        const normalized = normalizeClaude(body.hook);
-        eventsToInsert.push(...normalized);
+      if (body.hook_event_name === "Stop" && typeof body.session_id === "string") {
+        await endSession(body.session_id, "success");
       }
+    } else if (body.hook) {
+      const normalized = normalizeClaude(body.hook);
+      eventsToInsert.push(...normalized);
+    }
 
-      for (const event of eventsToInsert) {
-        insertEvent(event);
-
-        // If this is a user_message or the first event, try to extract the task
-        if (event.content && (event.type === "user_message" || event.type === "session_start")) {
-          setSessionTask(event.sessionId, event.content.slice(0, 500));
-        }
+    for (const event of eventsToInsert) {
+      await insertEvent(event);
+      if (event.content && (event.type === "user_message" || event.type === "session_start")) {
+        await setSessionTask(event.sessionId, event.content.slice(0, 500));
       }
-
-      res.json({ ok: true, inserted: eventsToInsert.length });
-    } catch (err) {
-      console.error("[agentlens] ingest error:", err);
-      res.status(500).json({ error: String(err) });
     }
-  });
 
-  // ── Import endpoints ────────────────────────────────────────────────────
+    res.json({ ok: true, inserted: eventsToInsert.length });
+  }));
 
-  /**
-   * GET /api/import/transcripts
-   * Lists available Claude Code transcript files.
-   */
-  api.get("/import/transcripts", (_req: Request, res: Response) => {
-    try {
-      const list = listTranscripts();
-      res.json({ transcripts: list });
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
+  // POST /api/sessions/:id/end
+  api.post("/sessions/:id/end", asyncRoute(async (req, res) => {
+    const { status = "success" } = req.body as { status?: string };
+    await endSession(req.params.id, status as "success" | "failed" | "unknown");
+    res.json({ ok: true });
+  }));
 
-  /**
-   * POST /api/import
-   * Import (or re-import) all Claude Code transcripts.
-   * Body: { force?: boolean }
-   */
-  api.post("/import", (req: Request, res: Response) => {
-    try {
-      const { force = false } = req.body as { force?: boolean };
-      const stats = importTranscripts({ force });
-      res.json({ ok: true, stats });
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
+  // ── Import endpoints ───────────────────────────────────────────────────────
 
-  /**
-   * POST /api/sessions/:id/end
-   * Allows the hook to mark a session as ended.
-   */
-  api.post("/sessions/:id/end", (req: Request, res: Response) => {
-    try {
-      const { status = "success" } = req.body as { status?: string };
-      endSession(req.params.id, status as "success" | "failed" | "unknown");
-      res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
+  // GET /api/import/transcripts
+  api.get("/import/transcripts", asyncRoute(async (_req, res) => {
+    const list = await listTranscripts();
+    res.json({ transcripts: list });
+  }));
+
+  // POST /api/import
+  api.post("/import", asyncRoute(async (req, res) => {
+    const { force = false } = req.body as { force?: boolean };
+    const stats = await importTranscripts({ force });
+    res.json({ ok: true, stats });
+  }));
 
   app.use("/api", api);
 
   // ── Static web UI ──────────────────────────────────────────────────────────
 
   if (!opts.dev) {
-    // In production, serve the pre-built Vite output
     const webDir = join(__dirname, "web");
     if (existsSync(webDir)) {
       app.use(express.static(webDir));
-      // SPA fallback — any non-API route serves index.html
-      app.get(/^(?!\/api).*/, (_req: Request, res: Response) => {
+      app.get(/^(?!\/api).*/, (_req, res) => {
         res.sendFile(join(webDir, "index.html"));
       });
     } else {
-      app.get("/", (_req: Request, res: Response) => {
+      app.get("/", (_req, res) => {
         res.send(
           `<h2>AgentLens collector is running on port ${DEFAULT_PORT}.</h2>` +
-            `<p>Web UI not found at <code>${webDir}</code>. Run <code>npm run build</code> to build it.</p>`
+            `<p>Build the web UI first: <code>npm run build:web</code></p>`
         );
       });
     }
@@ -194,7 +160,7 @@ export function createApp(opts: { dev?: boolean } = {}): express.Application {
   // ── Error handler ──────────────────────────────────────────────────────────
 
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error("[agentlens] unhandled error:", err);
+    console.error("[agentlens] unhandled error:", err.message);
     res.status(500).json({ error: err.message });
   });
 
@@ -203,15 +169,34 @@ export function createApp(opts: { dev?: boolean } = {}): express.Application {
 
 // ─── Start server ─────────────────────────────────────────────────────────────
 
-export async function startServer(opts: { port?: number; dev?: boolean } = {}): Promise<{ port: number; close: () => void }> {
+export async function startServer(opts: { port?: number; dev?: boolean } = {}): Promise<{
+  port: number;
+  close: () => void;
+}> {
   const port = opts.port ?? DEFAULT_PORT;
+
+  // Initialize database (with retry for Docker cold-start)
+  await initDB();
+
+  // Import existing transcripts on startup
+  try {
+    const stats = await importTranscripts();
+    if (stats.imported > 0) {
+      console.log(
+        `[agentlens] Imported ${stats.imported} historical session(s) from transcripts.`
+      );
+    }
+  } catch {
+    // Not fatal — transcripts may not exist
+  }
+
   const app = createApp({ dev: opts.dev });
 
   return new Promise((resolve, reject) => {
-    const server = app.listen(port, "127.0.0.1", () => {
-      // Start transcript watcher so sessions captured without hooks also appear
-      const stopWatcher = watchTranscripts(() => {
-        // Session updated — clients will pick it up on next poll
+    const server = app.listen(port, "0.0.0.0", () => {
+      // Start transcript watcher (polls ~/.claude/projects every 5s)
+      const stopWatcher = watchTranscripts((sessionId) => {
+        console.log(`[agentlens] Transcript updated: ${sessionId.slice(0, 8)}…`);
       });
 
       resolve({

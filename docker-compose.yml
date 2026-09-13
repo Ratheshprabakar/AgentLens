@@ -1,0 +1,45 @@
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentlens-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       agentlens
+      POSTGRES_USER:     agentlens
+      POSTGRES_PASSWORD: agentlens
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentlens -d agentlens"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ── AgentLens App ───────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentlens-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL:        postgresql://agentlens:agentlens@postgres:5432/agentlens
+      NODE_ENV:            production
+      PORT:                4040
+      CLAUDE_PROJECTS_DIR: /claude-projects
+    volumes:
+      # Mount Claude Code transcript directory (read-only)
+      # Docker Desktop: add ~/.claude to File Sharing in Preferences → Resources → File Sharing
+      - ${CLAUDE_PROJECTS_DIR:-~/.claude/projects}:/claude-projects:ro
+    ports:
+      - "${PORT:-4040}:4040"
+
+volumes:
+  pgdata:
+    name: agentlens-pgdata

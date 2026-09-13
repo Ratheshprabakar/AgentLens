@@ -1,17 +1,15 @@
 /**
  * AgentLens Transcript Importer
  *
- * Reads Claude Code's JSONL transcript files from ~/.claude/projects/
- * and backfills sessions into the local AgentLens database.
+ * Reads Claude Code's JSONL transcript files from the Claude projects directory
+ * (default: ~/.claude/projects/, or /claude-projects when running in Docker)
+ * and backfills sessions into the database.
  *
- * Claude Code writes one .jsonl file per session to:
- *   ~/.claude/projects/<encoded-project-path>/<session-uuid>.jsonl
- *
- * Each line is a JSON message in Anthropic Messages API format, wrapped
- * with metadata (uuid, timestamp, type, sessionId, cwd …).
+ * Claude Code writes one .jsonl per session:
+ *   <projects-dir>/<encoded-project-path>/<session-uuid>.jsonl
  */
 
-import { readFileSync, readdirSync, statSync, watchFile, unwatchFile } from "fs";
+import { readFileSync, readdirSync, statSync } from "fs";
 import { join, basename } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
@@ -27,7 +25,13 @@ import type { AgentEvent, EventType, AgentName } from "./types.js";
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
-export const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
+/**
+ * In Docker, ~/.claude/projects is mounted as /claude-projects.
+ * The CLAUDE_PROJECTS_DIR env var overrides the default.
+ */
+export const CLAUDE_PROJECTS_DIR =
+  process.env.CLAUDE_PROJECTS_DIR ??
+  join(homedir(), ".claude", "projects");
 
 // ─── Claude Code JSONL types ──────────────────────────────────────────────────
 
@@ -38,33 +42,28 @@ type ContentBlock =
   | { type: string; [key: string]: unknown };
 
 interface ClaudeEntry {
-  /** "user" | "human" | "assistant" | "system" | "result" | "summary" */
   type?: string;
-  /** Nested message object (common format) */
+  subtype?: string;
   message?: {
     role?: string;
     content?: string | ContentBlock[];
     model?: string;
     usage?: { input_tokens?: number; output_tokens?: number };
   };
-  /** Flat content (alternative format) */
   content?: string | ContentBlock[];
   uuid?: string;
   timestamp?: string;
   sessionId?: string;
   cwd?: string;
-  /** Result cost info */
   costUSD?: number;
   durationMs?: number;
   model?: string;
-  /** "success" | "error" | "interrupted" */
   result?: string;
   isError?: boolean;
-  subtype?: string;
   [key: string]: unknown;
 }
 
-// ─── Import result ────────────────────────────────────────────────────────────
+// ─── Import stats ─────────────────────────────────────────────────────────────
 
 export interface ImportStats {
   scanned: number;
@@ -76,25 +75,16 @@ export interface ImportStats {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Decode a Claude project directory name back to a filesystem path.
- * Claude uses the project's absolute path with '/' replaced by '-'.
- * e.g., "-Users-rathesh-projects-myapp" → "/Users/rathesh/projects/myapp"
- */
 function decodeCwd(dirName: string): string {
-  // Remove leading dash, replace remaining dashes with slashes
-  // This is a best-effort heuristic — paths with actual dashes are ambiguous
   return dirName.replace(/^-/, "/").replace(/-/g, "/");
 }
 
-/** Parse an ISO timestamp to milliseconds; fall back to Date.now() */
 function parseTs(ts?: string): number {
   if (!ts) return Date.now();
   const ms = Date.parse(ts);
   return isNaN(ms) ? Date.now() : ms;
 }
 
-/** Safely extract string content from a content block or string */
 function contentToString(content: string | ContentBlock[] | undefined): string {
   if (!content) return "";
   if (typeof content === "string") return content;
@@ -104,7 +94,6 @@ function contentToString(content: string | ContentBlock[] | undefined): string {
     .join("\n");
 }
 
-/** Extract all tool_use blocks from a content array */
 function extractToolUses(content: string | ContentBlock[] | undefined): Array<{
   id: string;
   name: string;
@@ -119,20 +108,13 @@ function extractToolUses(content: string | ContentBlock[] | undefined): Array<{
     });
 }
 
-/** Extract all tool_result blocks from a content array */
-function extractToolResults(content: string | ContentBlock[] | undefined): Map<
-  string,
-  { content: string; isError: boolean }
-> {
+function extractToolResults(content: string | ContentBlock[] | undefined): Map<string, { content: string; isError: boolean }> {
   const results = new Map<string, { content: string; isError: boolean }>();
   if (!content || typeof content === "string") return results;
-
   for (const block of content) {
     if (block.type !== "tool_result") continue;
     const r = block as { type: "tool_result"; tool_use_id: string; content: string | ContentBlock[]; is_error?: boolean };
-    const text = typeof r.content === "string"
-      ? r.content
-      : contentToString(r.content as ContentBlock[]);
+    const text = typeof r.content === "string" ? r.content : contentToString(r.content as ContentBlock[]);
     results.set(r.tool_use_id, { content: text.slice(0, 2000), isError: r.is_error ?? false });
   }
   return results;
@@ -156,7 +138,6 @@ function toolToEventType(name: string): EventType {
   return TOOL_TYPE_MAP[name] ?? "tool_call";
 }
 
-/** Build an AgentEvent from a transcript tool_use + optional tool_result */
 function toolCallToEvent(
   sessionId: string,
   agent: AgentName,
@@ -180,37 +161,35 @@ function toolCallToEvent(
   };
 
   switch (type) {
-    case "file_read": {
-      const path = (tool.input.path ?? tool.input.file_path) as string | undefined;
-      return { ...base, file: path, output: output?.slice(0, 500) };
-    }
+    case "file_read":
+      return {
+        ...base,
+        file: (tool.input.path ?? tool.input.file_path) as string | undefined,
+        output: output?.slice(0, 500),
+      };
 
     case "file_edit": {
-      const path = (tool.input.path ?? tool.input.file_path) as string | undefined;
-      const newStr = ((tool.input.new_string ?? tool.input.content ?? "") as string);
-      const oldStr = ((tool.input.old_string ?? "") as string);
-      const additions = newStr ? newStr.split("\n").length : undefined;
-      const deletions = oldStr ? Math.max(0, oldStr.split("\n").length - 1) : undefined;
-      return { ...base, file: path, additions, deletions };
+      const newStr = (tool.input.new_string ?? tool.input.content ?? "") as string;
+      const oldStr = (tool.input.old_string ?? "") as string;
+      return {
+        ...base,
+        file: (tool.input.path ?? tool.input.file_path) as string | undefined,
+        additions: newStr ? newStr.split("\n").length : undefined,
+        deletions: oldStr ? Math.max(0, oldStr.split("\n").length - 1) : undefined,
+      };
     }
 
     case "shell": {
       const command = (tool.input.command ?? tool.input.cmd ?? "") as string;
-      const isTest =
-        /\b(jest|vitest|pytest|go test|npm test|yarn test|pnpm test|mocha|jasmine|rspec|cargo test)\b/i.test(
-          command
-        );
-      const finalType: EventType = isTest ? "test_run" : "shell";
-
+      const isTest = /\b(jest|vitest|pytest|go test|npm test|yarn test|pnpm test|mocha|jasmine|rspec|cargo test)\b/i.test(command);
       let exitCode: number | undefined;
       if (output) {
         const m = output.match(/exit\s*code[:\s]+(\d+)/i);
         if (m) exitCode = parseInt(m[1], 10);
       }
-
       return {
         ...base,
-        type: finalType,
+        type: isTest ? "test_run" : "shell",
         command: command.slice(0, 500),
         exitCode,
         output: output?.slice(0, 1000),
@@ -219,22 +198,16 @@ function toolCallToEvent(
     }
 
     case "search": {
-      const query = (
-        tool.input.pattern ?? tool.input.query ?? tool.input.glob ?? tool.input.regex
-      ) as string | undefined;
+      const query = (tool.input.pattern ?? tool.input.query ?? tool.input.glob ?? tool.input.regex) as string | undefined;
       const resultCount = output ? output.split("\n").filter((l) => l.trim()).length : undefined;
       return { ...base, query: query?.slice(0, 300), resultCount, output: output?.slice(0, 500) };
     }
 
-    case "web": {
-      const url = (tool.input.url ?? tool.input.query) as string | undefined;
-      return { ...base, query: url?.slice(0, 500), output: output?.slice(0, 500) };
-    }
+    case "web":
+      return { ...base, query: ((tool.input.url ?? tool.input.query) as string | undefined)?.slice(0, 500), output: output?.slice(0, 500) };
 
-    case "subagent": {
-      const taskDesc = (tool.input.description ?? tool.input.prompt) as string | undefined;
-      return { ...base, content: taskDesc?.slice(0, 500) };
-    }
+    case "subagent":
+      return { ...base, content: ((tool.input.description ?? tool.input.prompt) as string | undefined)?.slice(0, 500) };
 
     default:
       return { ...base, output: output?.slice(0, 500) };
@@ -266,21 +239,16 @@ export function parseTranscript(filePath: string, encodedProjectDir: string): Pa
     return null;
   }
 
-  const lines = raw.split("\n").filter((l) => l.trim());
-  if (lines.length === 0) return null;
-
   const entries: ClaudeEntry[] = [];
-  for (const line of lines) {
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
     try {
       entries.push(JSON.parse(line) as ClaudeEntry);
     } catch {
       // Skip malformed lines
     }
   }
-
   if (entries.length === 0) return null;
-
-  // ── Extract metadata ─────────────────────────────────────────────────────
 
   let task: string | undefined;
   let model: string | undefined;
@@ -288,40 +256,25 @@ export function parseTranscript(filePath: string, encodedProjectDir: string): Pa
   let endTime: number | undefined;
   let status: "success" | "failed" | "unknown" = "unknown";
 
-  // First timestamp determines session start
-  const firstTs = entries[0]?.timestamp;
-  if (firstTs) startTime = parseTs(firstTs);
+  if (entries[0]?.timestamp) startTime = parseTs(entries[0].timestamp);
 
-  // Last result entry determines end state
-  const resultEntry = entries.find(
-    (e) => e.type === "result" || (e.subtype === "final_answer")
-  );
+  const resultEntry = entries.find((e) => e.type === "result" || e.subtype === "final_answer");
   if (resultEntry) {
     endTime = parseTs(resultEntry.timestamp);
     status = resultEntry.isError || resultEntry.result === "error" ? "failed" : "success";
   } else {
-    // If last entry has a timestamp, use it as end time
     const lastTs = entries[entries.length - 1]?.timestamp;
     if (lastTs) endTime = parseTs(lastTs);
   }
 
-  // Detect model from any assistant entry
   for (const e of entries) {
     const m = e.model ?? e.message?.model;
     if (m) { model = String(m); break; }
   }
 
-  // ── Build tool call → result pairs ───────────────────────────────────────
-  // We iterate entries and build a pending map of tool_use_id → tool_use data.
-  // When we find a tool_result we pair it up.
-
   const events: AgentEvent[] = [];
-  const pendingToolCalls = new Map<string, {
-    tool: { id: string; name: string; input: Record<string, unknown> };
-    timestamp: number;
-  }>();
+  const pendingToolCalls = new Map<string, { tool: { id: string; name: string; input: Record<string, unknown> }; timestamp: number }>();
 
-  // Session start marker
   events.push({
     id: randomUUID(),
     sessionId,
@@ -331,74 +284,47 @@ export function parseTranscript(filePath: string, encodedProjectDir: string): Pa
     content: "Session started (imported from transcript)",
   });
 
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
+  for (const entry of entries) {
     const ts = parseTs(entry.timestamp);
-
-    // Get content from either the wrapper format or flat format
     const msgContent = entry.message?.content ?? entry.content;
     const role = entry.type ?? entry.message?.role;
 
-    // ── User / Human messages ────────────────────────────────────────────
     if (role === "user" || role === "human") {
       if (typeof msgContent === "string" && msgContent.trim()) {
-        // First substantive user message = task
-        if (!task) {
-          task = msgContent.slice(0, 500);
-        }
+        if (!task) task = msgContent.slice(0, 500);
       } else if (Array.isArray(msgContent)) {
-        // Check for tool results
         const results = extractToolResults(msgContent);
         for (const [toolUseId, result] of results) {
           const pending = pendingToolCalls.get(toolUseId);
           if (pending) {
-            events.push(
-              toolCallToEvent(sessionId, agent, pending.tool, result, pending.timestamp)
-            );
+            events.push(toolCallToEvent(sessionId, agent, pending.tool, result, pending.timestamp));
             pendingToolCalls.delete(toolUseId);
           }
         }
-
-        // Also check if this is a plain user message (array with text blocks)
         const text = contentToString(msgContent);
-        if (text.trim() && !task) {
-          task = text.slice(0, 500);
-        }
+        if (text.trim() && !task) task = text.slice(0, 500);
       }
     }
 
-    // ── Assistant messages ───────────────────────────────────────────────
     if (role === "assistant") {
-      const toolUses = extractToolUses(msgContent);
-      for (const tu of toolUses) {
+      for (const tu of extractToolUses(msgContent)) {
         pendingToolCalls.set(tu.id, { tool: tu, timestamp: ts });
       }
     }
 
-    // ── Result / Summary messages ────────────────────────────────────────
     if (entry.type === "result" || entry.subtype === "final_answer") {
       const text = typeof entry.result === "string" ? entry.result : contentToString(msgContent);
       if (text) {
-        events.push({
-          id: randomUUID(),
-          sessionId,
-          agent,
-          timestamp: ts,
-          type: "agent_message",
-          content: text.slice(0, 1000),
-        });
+        events.push({ id: randomUUID(), sessionId, agent, timestamp: ts, type: "agent_message", content: text.slice(0, 1000) });
       }
     }
   }
 
-  // Flush any remaining tool calls that had no result (rare edge case)
+  // Flush unmatched tool calls
   for (const [, pending] of pendingToolCalls) {
-    events.push(
-      toolCallToEvent(sessionId, agent, pending.tool, undefined, pending.timestamp)
-    );
+    events.push(toolCallToEvent(sessionId, agent, pending.tool, undefined, pending.timestamp));
   }
 
-  // Session end marker
   if (endTime) {
     events.push({
       id: randomUUID(),
@@ -416,29 +342,26 @@ export function parseTranscript(filePath: string, encodedProjectDir: string): Pa
 
 // ─── Import all transcripts ───────────────────────────────────────────────────
 
-export function importTranscripts(opts: {
-  force?: boolean; // re-import even if session already in DB
+export async function importTranscripts(opts: {
+  force?: boolean;
   onProgress?: (msg: string) => void;
-} = {}): ImportStats {
+} = {}): Promise<ImportStats> {
   const stats: ImportStats = { scanned: 0, imported: 0, skipped: 0, errors: 0, sessions: [] };
 
   let projectDirs: string[];
   try {
     projectDirs = readdirSync(CLAUDE_PROJECTS_DIR);
   } catch {
-    // ~/.claude/projects doesn't exist — Claude Code not installed or never run
-    return stats;
+    return stats; // ~/.claude/projects doesn't exist
   }
 
   for (const projectDir of projectDirs) {
     const projectPath = join(CLAUDE_PROJECTS_DIR, projectDir);
-    let stat: ReturnType<typeof statSync>;
     try {
-      stat = statSync(projectPath);
+      if (!statSync(projectPath).isDirectory()) continue;
     } catch {
       continue;
     }
-    if (!stat.isDirectory()) continue;
 
     let files: string[];
     try {
@@ -452,10 +375,13 @@ export function importTranscripts(opts: {
       const filePath = join(projectPath, file);
       const sessionId = basename(file, ".jsonl");
 
-      // Skip if already in DB (unless forced)
-      if (!opts.force && getSessionById(sessionId)) {
-        stats.skipped++;
-        continue;
+      // Skip already-imported sessions unless forced
+      if (!opts.force) {
+        const existing = await getSessionById(sessionId);
+        if (existing) {
+          stats.skipped++;
+          continue;
+        }
       }
 
       try {
@@ -465,8 +391,7 @@ export function importTranscripts(opts: {
           continue;
         }
 
-        // Write session
-        upsertSession({
+        await upsertSession({
           id: parsed.sessionId,
           agent: "claude-code",
           model: parsed.model,
@@ -475,32 +400,23 @@ export function importTranscripts(opts: {
           startTime: parsed.startTime,
         });
 
-        if (parsed.task) setSessionTask(parsed.sessionId, parsed.task);
+        if (parsed.task) await setSessionTask(parsed.sessionId, parsed.task);
 
-        // Write events
         for (const event of parsed.events) {
           try {
-            insertEvent(event);
+            await insertEvent(event);
           } catch {
-            // Duplicate or malformed — skip individual events
+            // Duplicate or malformed — skip
           }
         }
 
-        // Mark session end
         if (parsed.endTime) {
-          endSession(parsed.sessionId, parsed.status);
+          await endSession(parsed.sessionId, parsed.status);
         }
 
         stats.imported++;
-        stats.sessions.push({
-          id: parsed.sessionId,
-          task: parsed.task,
-          events: parsed.events.length,
-        });
-
-        opts.onProgress?.(
-          `Imported session ${parsed.sessionId.slice(0, 8)}… (${parsed.events.length} events)`
-        );
+        stats.sessions.push({ id: parsed.sessionId, task: parsed.task, events: parsed.events.length });
+        opts.onProgress?.(`Imported ${parsed.sessionId.slice(0, 8)}… (${parsed.events.length} events)`);
       } catch (err) {
         stats.errors++;
         opts.onProgress?.(`Error importing ${file}: ${String(err)}`);
@@ -513,20 +429,12 @@ export function importTranscripts(opts: {
 
 // ─── Watch mode ───────────────────────────────────────────────────────────────
 
-/** Files we are actively watching (path → last mtime) */
 const watchedFiles = new Map<string, number>();
 
-/**
- * Watch ~/.claude/projects/ for new or updated JSONL files.
- * Calls onChange whenever a new session is imported.
- *
- * Returns an unsubscribe function.
- */
 export function watchTranscripts(onChange: (sessionId: string) => void): () => void {
   let running = true;
 
-  // Poll every 5 seconds — fs.watch on macOS directories misses nested changes
-  const tick = () => {
+  const tick = async () => {
     if (!running) return;
 
     let projectDirs: string[];
@@ -540,6 +448,7 @@ export function watchTranscripts(onChange: (sessionId: string) => void): () => v
       const projectPath = join(CLAUDE_PROJECTS_DIR, projectDir);
       let files: string[];
       try {
+        if (!statSync(projectPath).isDirectory()) continue;
         files = readdirSync(projectPath).filter((f) => f.endsWith(".jsonl"));
       } catch {
         continue;
@@ -555,54 +464,44 @@ export function watchTranscripts(onChange: (sessionId: string) => void): () => v
         }
 
         const lastMtime = watchedFiles.get(filePath);
+        if (lastMtime !== undefined && mtime <= lastMtime) continue;
 
-        // New file, or file was updated
-        if (lastMtime === undefined || mtime > lastMtime) {
-          watchedFiles.set(filePath, mtime);
+        watchedFiles.set(filePath, mtime);
+        const sessionId = basename(file, ".jsonl");
 
-          const sessionId = basename(file, ".jsonl");
-          const existing = getSessionById(sessionId);
+        try {
+          const existing = await getSessionById(sessionId);
+          if (existing && existing.status !== "running") continue;
 
-          // Only re-import if new OR the session is still marked running
-          if (!existing || existing.status === "running") {
-            try {
-              const parsed = parseTranscript(filePath, projectDir);
-              if (!parsed) continue;
+          const parsed = parseTranscript(filePath, projectDir);
+          if (!parsed) continue;
 
-              upsertSession({
-                id: parsed.sessionId,
-                agent: "claude-code",
-                model: parsed.model,
-                task: parsed.task,
-                cwd: parsed.cwd,
-                startTime: parsed.startTime,
-              });
+          await upsertSession({
+            id: parsed.sessionId,
+            agent: "claude-code",
+            model: parsed.model,
+            task: parsed.task,
+            cwd: parsed.cwd,
+            startTime: parsed.startTime,
+          });
 
-              if (parsed.task) setSessionTask(parsed.sessionId, parsed.task);
-
-              for (const event of parsed.events) {
-                try { insertEvent(event); } catch { /* deduplicate */ }
-              }
-
-              if (parsed.endTime) {
-                endSession(parsed.sessionId, parsed.status);
-              }
-
-              onChange(parsed.sessionId);
-            } catch {
-              // Ignore per-file errors in watch mode
-            }
+          if (parsed.task) await setSessionTask(parsed.sessionId, parsed.task);
+          for (const event of parsed.events) {
+            try { await insertEvent(event); } catch { /* deduplicate */ }
           }
+          if (parsed.endTime) await endSession(parsed.sessionId, parsed.status);
+
+          onChange(parsed.sessionId);
+        } catch {
+          // Ignore per-file errors in watch mode
         }
       }
     }
   };
 
-  // Initial scan
-  tick();
-
-  // Poll every 5 s
-  const timer = setInterval(tick, 5000);
+  // Initial scan then poll every 5 s
+  void tick();
+  const timer = setInterval(() => void tick(), 5000);
 
   return () => {
     running = false;
@@ -622,11 +521,9 @@ export interface TranscriptInfo {
   alreadyImported: boolean;
 }
 
-export function listTranscripts(): TranscriptInfo[] {
+export async function listTranscripts(): Promise<TranscriptInfo[]> {
   const results: TranscriptInfo[] = [];
-
-  // Get all already-imported session IDs
-  const importedIds = new Set(getAllSessions(10000).map((s) => s.id));
+  const importedIds = new Set((await getAllSessions(10000)).map((s) => s.id));
 
   let projectDirs: string[];
   try {
