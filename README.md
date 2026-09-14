@@ -1,21 +1,18 @@
-<p align="center">
-  <strong>AgentLens</strong><br/>
-  DevTools for AI coding agents
-</p>
+<div align="center">
 
-<p align="center">
-  Your coding agent has a timeline. You just couldn’t see it.
-</p>
+# AgentLens
 
-<p align="center">
-  <a href="https://tryagentlens.vercel.app">Website</a> ·
-  <a href="https://hub.docker.com/r/ratheshprabakar/agentlens">Docker Hub</a> ·
-  <a href="#quick-start">Install</a>
-</p>
+**DevTools for AI coding agents**
 
-<p align="center">
-  <img src="docs/hero.png" alt="AgentLens dashboard - live session timeline" width="920" />
-</p>
+Your coding agent has a timeline. You just couldn’t see it.
+
+[Website](https://tryagentlens.vercel.app) ·
+[Docker Hub](https://hub.docker.com/r/ratheshprabakar/agentlens) ·
+[Install](#quick-start)
+
+<img src="docs/hero.png" alt="AgentLens dashboard — live session timeline" width="920" />
+
+</div>
 
 ---
 
