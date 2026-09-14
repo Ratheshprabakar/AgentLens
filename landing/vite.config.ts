@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-/** Project Pages need /AgentLens/; override with VITE_BASE=/ for a custom domain. */
+/** Default `/` for Vercel; set VITE_BASE if hosting under a subpath. */
 const base = process.env.VITE_BASE ?? "/";
 
 export default defineConfig({
