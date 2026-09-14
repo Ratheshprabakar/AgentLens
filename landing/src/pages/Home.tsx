@@ -32,7 +32,7 @@ export default function Home() {
           </a>
           <nav className="home__nav-links" aria-label="Page">
             <a href="#features">Features</a>
-            <a href="#supported">Supported</a>
+            <a href="#supported">Agents</a>
             <a href="#faq">FAQ</a>
             <a href="#install" className="home__nav-cta">
               Install

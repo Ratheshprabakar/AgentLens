@@ -47,18 +47,12 @@
     var(--ink-hover);
 }
 
-.supported__mark {
+.supported__logo {
   width: 40px;
   height: 40px;
   flex-shrink: 0;
-}
-
-.supported__tile--live .supported__mark {
-  color: var(--agent-claude);
-}
-
-.supported__tile--import .supported__mark {
-  color: var(--agent-cursor);
+  object-fit: contain;
+  border-radius: 8px;
 }
 
 .supported__meta {

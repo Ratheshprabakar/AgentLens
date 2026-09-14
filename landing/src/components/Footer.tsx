@@ -12,7 +12,7 @@ export default function Footer() {
           <span className="site-foot__sep" aria-hidden>
             ·
           </span>
-          <span className="mono">v1.0.0</span>
+          <span className="mono">v1.0.1</span>
           <span className="site-foot__sep" aria-hidden>
             ·
           </span>

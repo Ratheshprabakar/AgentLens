@@ -4,63 +4,22 @@ import "./Supported.css";
 
 /**
  * Single place to update when a new agent lands.
- * Add an entry here - no need to rewrite the rest of the landing page.
+ * Logos from https://github.com/glincker/thesvg (jsDelivr CDN).
  */
 const SUPPORTED = [
   {
     name: "Claude Code",
     detail: "Live capture",
     status: "live" as const,
-    mark: "claude" as const,
+    logo: "https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons/claude-code/default.svg",
   },
   {
     name: "Cursor",
     detail: "Import sessions",
     status: "import" as const,
-    mark: "cursor" as const,
+    logo: "https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons/cursor/default.svg",
   },
 ];
-
-function Mark({ kind }: { kind: "claude" | "cursor" }) {
-  if (kind === "claude") {
-    return (
-      <svg className="supported__mark" viewBox="0 0 40 40" aria-hidden>
-        <circle
-          cx="20"
-          cy="20"
-          r="18"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
-        <path
-          d="M20 8.5 L23.2 16.2 L31.5 17.1 L25.2 22.6 L27.1 30.8 L20 26.4 L12.9 30.8 L14.8 22.6 L8.5 17.1 L16.8 16.2 Z"
-          fill="currentColor"
-          opacity="0.9"
-        />
-      </svg>
-    );
-  }
-  return (
-    <svg className="supported__mark" viewBox="0 0 40 40" aria-hidden>
-      <rect
-        x="5"
-        y="5"
-        width="30"
-        height="30"
-        rx="8"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
-      <path
-        d="M14 12 L28 20 L18 22 L16 28 Z"
-        fill="currentColor"
-        opacity="0.9"
-      />
-    </svg>
-  );
-}
 
 export default function Supported() {
   const reduce = useReducedMotion();
@@ -76,7 +35,7 @@ export default function Supported() {
           viewport={viewportOnce}
         >
           <motion.h2 className="supported__heading" variants={fadeUp}>
-            Supported today
+            Supported Agents
           </motion.h2>
           <motion.p className="supported__sub" variants={fadeUp}>
             One timeline for the AI coding agents you already use. More coming.
@@ -98,7 +57,13 @@ export default function Supported() {
               whileHover={reduce ? undefined : { y: -3 }}
               transition={{ duration: 0.2, ease: easeOut }}
             >
-              <Mark kind={tool.mark} />
+              <img
+                className="supported__logo"
+                src={tool.logo}
+                alt=""
+                width={40}
+                height={40}
+              />
               <div className="supported__meta">
                 <span className="supported__name">{tool.name}</span>
                 <span className="supported__detail mono">{tool.detail}</span>
