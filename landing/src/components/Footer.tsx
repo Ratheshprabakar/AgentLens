@@ -17,7 +17,7 @@ export default function Footer() {
             ·
           </span>
           <a href={GITHUB} target="_blank" rel="noopener noreferrer">
-            GitHub
+            Star on GitHub
           </a>
           <span className="site-foot__sep" aria-hidden>
             ·

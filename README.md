@@ -1,62 +1,99 @@
-# AgentLens
+<p align="center">
+  <strong>AgentLens</strong><br/>
+  DevTools for AI coding agents
+</p>
 
-**DevTools for AI coding agents.**
+<p align="center">
+  Your coding agent has a timeline. You just couldn’t see it.
+</p>
 
-Local timeline for what your coding agent actually did - prompts, file reads, edits, shell commands, and searches - so you can see where time went and where it got stuck.
+<p align="center">
+  <a href="https://tryagentlens.vercel.app">Website</a> ·
+  <a href="https://hub.docker.com/r/ratheshprabakar/agentlens">Docker Hub</a> ·
+  <a href="#quick-start">Install</a>
+</p>
 
-Supports **Claude Code** (live capture) and **Cursor** (import). More agents coming.
-
-![AgentLens — local DevTools for AI coding agents](docs/hero.png)
-
-Docker image: [ratheshprabakar/agentlens](https://hub.docker.com/r/ratheshprabakar/agentlens)
+<p align="center">
+  <img src="docs/hero.png" alt="AgentLens dashboard — live session timeline" width="920" />
+</p>
 
 ---
 
-## Install
+AgentLens turns opaque agent sessions into a **local, scannable timeline** — every prompt, file read, edit, shell command, and search, in order — so you can see where time went and where the agent got stuck.
 
-**Requirements:** [Docker Desktop](https://www.docker.com/get-started/) and `curl`.
+Runs on your machine. No account. No cloud upload.
+
+## Why
+
+Long agent runs burn time and tokens, then leave you guessing. AgentLens gives you the same clarity DevTools gave the browser: a timeline you can scrub, not a wall of logs.
+
+## Features
+
+- **Live timeline** — Watch the next agent run as it happens
+- **Find the loop** — Spot thrash, dead ends, and the step that burned the time
+- **Import history** — Rebuild past sessions without replaying them
+- **Local by default** — Data stays on your box
+
+## Supported agents
+
+| Agent | Mode |
+| ----- | ---- |
+| [Claude Code](https://claude.ai/code) | Live capture |
+| [Cursor](https://cursor.com) | Import sessions |
+
+More agents coming.
+
+## Quick start
+
+**Requires:** [Docker Desktop](https://www.docker.com/get-started/) and `curl`.
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash
 ```
 
-That one command:
+One command will:
 
-1. Pulls the AgentLens image from Docker Hub
-2. Starts a single container (app + embedded Postgres)
-3. Installs Claude Code hooks on your machine
-4. Opens the dashboard (default **http://localhost:4040**)
+1. Pull the AgentLens image  
+2. Start the app (database included)  
+3. Wire up Claude Code live capture  
+4. Open the dashboard at **http://localhost:4040**
 
-You do not type volume mounts.
-
-**If port 4040 is already in use:**
+Port `4040` already in use?
 
 ```bash
 PORT=4050 curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash
 ```
 
-Then open **http://localhost:4050**.
+## After install
 
-### After the first install
+1. Keep the **agentlens** container running in Docker Desktop (or start it when you need it)  
+2. Open the dashboard in your browser  
+3. Use your coding agent as usual — sessions appear on the timeline  
 
-- Start/stop the **agentlens** container in Docker Desktop (or leave it running).
-- Open the dashboard URL in your browser.
-- Run your agent as usual - live sessions show up on the timeline.
-- You do **not** need to re-run the curl install unless you are updating or recreated the container.
+You only re-run the install command to update, or if you removed the container.
 
----
+## How it works
+
+```text
+Coding agent  ──hooks──▶  AgentLens (Docker)  ──▶  Local timeline UI
+                              │
+                              └── embedded database (persisted)
+```
+
+Sessions are captured three ways:
+
+| Path | What it does |
+| ---- | ------------ |
+| **Live hooks** | Stream events while the agent runs |
+| **Startup import** | Backfill history when the container starts |
+| **Watcher** | Pick up growing transcript files while running |
 
 ## Stop / uninstall
 
 ```bash
-# Stop the app (keeps saved sessions in the Docker volume)
-docker stop agentlens
-
-# Remove the container (data volume kept)
-docker rm agentlens
-
-# Delete stored sessions too
-docker volume rm agentlens-data
+docker stop agentlens          # pause
+docker rm agentlens            # remove container (keeps data)
+docker volume rm agentlens-data   # delete stored sessions
 
 # Remove Claude Code hooks only
 curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash -s -- --uninstall-hooks
@@ -64,27 +101,7 @@ curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scr
 
 ---
 
-## How it works
-
-```
-Your coding agent (e.g. Claude Code)
-        │
-        ▼  hooks POST each event
-   http://localhost:4040/api/events
-        │
-        ▼
-┌─────────────────────────────────────┐
-│  Docker - ratheshprabakar/agentlens │
-│                                     │
-│  App  →  ingest / import / UI       │
-│   │                                 │
-│   └─→  Embedded PostgreSQL          │
-│        (volume: agentlens-data)     │
-└─────────────────────────────────────┘
-```
-
-| Capture path           | When                                | Needs AgentLens running? |
-| ---------------------- | ----------------------------------- | ------------------------ |
-| **Live hooks**         | Each tool call while the agent runs | Yes                      |
-| **Startup import**     | When the container starts           | Backfills history        |
-| **Transcript watcher** | Every few seconds while running     | Picks up growing files   |
+<p align="center">
+  <a href="https://tryagentlens.vercel.app">tryagentlens.vercel.app</a>
+  · Made with love by <a href="https://linkedin.com/in/Ratheshprabakar">Rathesh Prabakar</a>
+</p>
