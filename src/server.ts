@@ -1,7 +1,10 @@
-import express, { type Request, type Response, type NextFunction } from "express";
+import express, {
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
 import cors from "cors";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
+import { join } from "path";
 import { existsSync } from "fs";
 
 import {
@@ -15,11 +18,13 @@ import {
   initDB,
 } from "./db.js";
 import { normalizeClaude } from "./normalize.js";
-import { importTranscripts, listTranscripts, watchTranscripts } from "./importer.js";
+import {
+  importTranscripts,
+  listTranscripts,
+  watchTranscripts,
+} from "./importer.js";
 import type { AgentEvent } from "./types.js";
 import { randomUUID } from "crypto";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -29,7 +34,7 @@ export const DEFAULT_PORT = 4040;
 
 /** Wraps an async route handler so unhandled promise rejections reach the error middleware. */
 function asyncRoute(
-  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>,
 ) {
   return (req: Request, res: Response, next: NextFunction) => {
     fn(req, res, next).catch(next);
@@ -54,94 +59,126 @@ export function createApp(opts: { dev?: boolean } = {}): express.Application {
   });
 
   // GET /api/sessions
-  api.get("/sessions", asyncRoute(async (_req, res) => {
-    const sessions = await getAllSessions(200);
-    res.json({ sessions });
-  }));
+  api.get(
+    "/sessions",
+    asyncRoute(async (_req, res) => {
+      const sessions = await getAllSessions(200);
+      res.json({ sessions });
+    }),
+  );
 
   // GET /api/sessions/:id
-  api.get("/sessions/:id", asyncRoute(async (req, res) => {
-    const session = await getSessionById(req.params.id);
-    if (!session) {
-      res.status(404).json({ error: "Session not found" });
-      return;
-    }
-    const events = await getEventsBySession(req.params.id);
-    res.json({ session, events });
-  }));
+  api.get(
+    "/sessions/:id",
+    asyncRoute(async (req, res) => {
+      const session = await getSessionById(req.params.id);
+      if (!session) {
+        res.status(404).json({ error: "Session not found" });
+        return;
+      }
+      const events = await getEventsBySession(req.params.id);
+      res.json({ session, events });
+    }),
+  );
 
   // DELETE /api/sessions/:id
-  api.delete("/sessions/:id", asyncRoute(async (req, res) => {
-    await deleteSession(req.params.id);
-    res.json({ ok: true });
-  }));
+  api.delete(
+    "/sessions/:id",
+    asyncRoute(async (req, res) => {
+      await deleteSession(req.params.id);
+      res.json({ ok: true });
+    }),
+  );
 
   /**
    * POST /api/events
    * Three accepted formats:
-   *   1. { event: AgentEvent }      — pre-normalized
-   *   2. Raw Claude hook payload    — normalized server-side
-   *   3. { hook: ClaudeHookInput }  — wrapped Claude hook
+   *   1. { event: AgentEvent }      - pre-normalized
+   *   2. Raw Claude hook payload    - normalized server-side
+   *   3. { hook: ClaudeHookInput }  - wrapped Claude hook
    */
-  api.post("/events", asyncRoute(async (req, res) => {
-    const body = req.body as Record<string, unknown>;
-    const eventsToInsert: AgentEvent[] = [];
+  api.post(
+    "/events",
+    asyncRoute(async (req, res) => {
+      const body = req.body as Record<string, unknown>;
+      const eventsToInsert: AgentEvent[] = [];
 
-    if (body.event) {
-      const event = body.event as AgentEvent;
-      if (!event.id) event.id = randomUUID();
-      eventsToInsert.push(event);
-    } else if (body.hook_event_name) {
-      // Raw Claude hook (stdin → POST)
-      const normalized = normalizeClaude(body);
-      eventsToInsert.push(...normalized);
+      if (body.event) {
+        const event = body.event as AgentEvent;
+        if (!event.id) event.id = randomUUID();
+        eventsToInsert.push(event);
+      } else if (body.hook_event_name) {
+        // Raw Claude hook (stdin → POST)
+        const normalized = normalizeClaude(body);
+        eventsToInsert.push(...normalized);
 
-      if (body.hook_event_name === "Stop" && typeof body.session_id === "string") {
-        await endSession(body.session_id, "success");
+        if (
+          body.hook_event_name === "Stop" &&
+          typeof body.session_id === "string"
+        ) {
+          await endSession(body.session_id, "success");
+        }
+      } else if (body.hook) {
+        const normalized = normalizeClaude(body.hook);
+        eventsToInsert.push(...normalized);
       }
-    } else if (body.hook) {
-      const normalized = normalizeClaude(body.hook);
-      eventsToInsert.push(...normalized);
-    }
 
-    for (const event of eventsToInsert) {
-      await insertEvent(event);
-      if (event.content && (event.type === "user_message" || event.type === "session_start")) {
-        await setSessionTask(event.sessionId, event.content.slice(0, 500));
+      for (const event of eventsToInsert) {
+        await insertEvent(event);
+        if (
+          event.content &&
+          (event.type === "user_message" || event.type === "session_start")
+        ) {
+          await setSessionTask(event.sessionId, event.content.slice(0, 500));
+        }
       }
-    }
 
-    res.json({ ok: true, inserted: eventsToInsert.length });
-  }));
+      res.json({ ok: true, inserted: eventsToInsert.length });
+    }),
+  );
 
   // POST /api/sessions/:id/end
-  api.post("/sessions/:id/end", asyncRoute(async (req, res) => {
-    const { status = "success" } = req.body as { status?: string };
-    await endSession(req.params.id, status as "success" | "failed" | "unknown");
-    res.json({ ok: true });
-  }));
+  api.post(
+    "/sessions/:id/end",
+    asyncRoute(async (req, res) => {
+      const { status = "success" } = req.body as { status?: string };
+      await endSession(
+        req.params.id,
+        status as "success" | "failed" | "unknown",
+      );
+      res.json({ ok: true });
+    }),
+  );
 
   // ── Import endpoints ───────────────────────────────────────────────────────
 
   // GET /api/import/transcripts
-  api.get("/import/transcripts", asyncRoute(async (_req, res) => {
-    const list = await listTranscripts();
-    res.json({ transcripts: list });
-  }));
+  api.get(
+    "/import/transcripts",
+    asyncRoute(async (_req, res) => {
+      const list = await listTranscripts();
+      res.json({ transcripts: list });
+    }),
+  );
 
   // POST /api/import
-  api.post("/import", asyncRoute(async (req, res) => {
-    const { force = false } = req.body as { force?: boolean };
-    const stats = await importTranscripts({ force });
-    res.json({ ok: true, stats });
-  }));
+  api.post(
+    "/import",
+    asyncRoute(async (req, res) => {
+      const { force = false } = req.body as { force?: boolean };
+      const stats = await importTranscripts({ force });
+      res.json({ ok: true, stats });
+    }),
+  );
 
   app.use("/api", api);
 
   // ── Static web UI ──────────────────────────────────────────────────────────
 
   if (!opts.dev) {
-    const webDir = join(__dirname, "web");
+    // Bun runs src/cli.ts directly so __dirname is /app/src.
+    // Web assets are always at <cwd>/dist/web regardless of runtime.
+    const webDir = join(process.cwd(), "dist", "web");
     if (existsSync(webDir)) {
       app.use(express.static(webDir));
       app.get(/^(?!\/api).*/, (_req, res) => {
@@ -151,7 +188,7 @@ export function createApp(opts: { dev?: boolean } = {}): express.Application {
       app.get("/", (_req, res) => {
         res.send(
           `<h2>AgentLens collector is running on port ${DEFAULT_PORT}.</h2>` +
-            `<p>Build the web UI first: <code>npm run build:web</code></p>`
+            `<p>Build the web UI first: <code>pnpm run build:web</code></p>`,
         );
       });
     }
@@ -169,7 +206,9 @@ export function createApp(opts: { dev?: boolean } = {}): express.Application {
 
 // ─── Start server ─────────────────────────────────────────────────────────────
 
-export async function startServer(opts: { port?: number; dev?: boolean } = {}): Promise<{
+export async function startServer(
+  opts: { port?: number; dev?: boolean } = {},
+): Promise<{
   port: number;
   close: () => void;
 }> {
@@ -183,20 +222,22 @@ export async function startServer(opts: { port?: number; dev?: boolean } = {}): 
     const stats = await importTranscripts();
     if (stats.imported > 0) {
       console.log(
-        `[agentlens] Imported ${stats.imported} historical session(s) from transcripts.`
+        `[agentlens] Imported ${stats.imported} historical session(s) from transcripts.`,
       );
     }
   } catch {
-    // Not fatal — transcripts may not exist
+    // Not fatal - transcripts may not exist
   }
 
   const app = createApp({ dev: opts.dev });
 
   return new Promise((resolve, reject) => {
     const server = app.listen(port, "0.0.0.0", () => {
-      // Start transcript watcher (polls ~/.claude/projects every 5s)
+      // Start transcript watcher (Claude Code + Cursor, every 5s)
       const stopWatcher = watchTranscripts((sessionId) => {
-        console.log(`[agentlens] Transcript updated: ${sessionId.slice(0, 8)}…`);
+        console.log(
+          `[agentlens] Transcript updated: ${sessionId.slice(0, 8)}…`,
+        );
       });
 
       resolve({

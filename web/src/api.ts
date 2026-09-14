@@ -79,6 +79,7 @@ export interface TranscriptInfo {
   sizeBytes: number;
   modifiedAt: number;
   alreadyImported: boolean;
+  agent?: "claude-code" | "cursor";
 }
 
 export interface ImportStats {

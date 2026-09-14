@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# AgentLens — One-command installer
+# AgentLens - One-command installer
 #
 # What this script does:
-#   1. Installs Claude Code hooks (curl-based — no Node.js dependency on host)
+#   1. Installs Claude Code hooks (curl-based - no Node.js dependency on host)
 #   2. Starts AgentLens via docker-compose
 #   3. Opens the dashboard in your browser
 #
@@ -20,6 +20,10 @@ AGENTLENS_PORT="${PORT:-4040}"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 COLLECTOR_URL="http://localhost:${AGENTLENS_PORT}/api/events"
 
+# GitHub repo for downloading production assets (update to your fork if needed)
+GITHUB_REPO="Ratheshprabakar/AgentLens"
+COMPOSE_PROD_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main/docker-compose.prod.yml"
+
 # ── Colors ────────────────────────────────────────────────────────────────────
 
 BOLD='\033[1m'
@@ -31,7 +35,7 @@ RESET='\033[0m'
 
 banner() {
   echo ""
-  echo -e "${BOLD}  AgentLens v0.1${RESET}  ${DIM}DevTools for AI coding agents${RESET}"
+  echo -e "${BOLD}  AgentLens v1.0${RESET}  ${DIM}DevTools for AI coding agents${RESET}"
   echo -e "${DIM}  ─────────────────────────────────────────────${RESET}"
 }
 
@@ -69,7 +73,7 @@ print("  Hooks removed.")
 PYEOF
     echo -e "  ${GREEN}✓${RESET} Hooks removed from ${DIM}${CLAUDE_SETTINGS}${RESET}"
   else
-    echo -e "  ${YELLOW}⚠${RESET}  Settings file not found — nothing to remove."
+    echo -e "  ${YELLOW}⚠${RESET}  Settings file not found - nothing to remove."
   fi
   echo ""
   exit 0
@@ -172,12 +176,33 @@ if ! docker compose version &>/dev/null 2>&1; then
   COMPOSE_CMD="docker-compose"
 fi
 
-# Determine the script directory (works whether run from any cwd)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ── Detect mode: developer (source present) vs end-user (curl | bash) ────────
+#
+# If the script is run from inside a cloned repo we build from source.
+# If piped from the internet (or run without source), we pull from Docker Hub.
+#
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/tmp}")" 2>/dev/null && pwd || echo "/tmp")"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-cd "$PROJECT_DIR"
-$COMPOSE_CMD up -d --build
+if [[ -f "$PROJECT_DIR/src/cli.ts" ]] && [[ -f "$PROJECT_DIR/docker-compose.yml" ]]; then
+  # ── Developer mode: build from local source ───────────────────────────────
+  echo -e "  ${DIM}(developer mode - building from source)${RESET}"
+  cd "$PROJECT_DIR"
+  $COMPOSE_CMD up -d --build
+else
+  # ── End-user mode: pull pre-built image from Docker Hub ───────────────────
+  echo -e "  ${DIM}(end-user mode - pulling from Docker Hub)${RESET}"
+  COMPOSE_FILE="/tmp/agentlens-compose.yml"
+
+  if ! curl -sSfL "$COMPOSE_PROD_URL" -o "$COMPOSE_FILE"; then
+    echo -e "  ${RED}✗${RESET} Failed to download docker-compose file."
+    echo -e "  ${DIM}  URL: ${COMPOSE_PROD_URL}${RESET}"
+    echo -e "  ${DIM}  Check your internet connection and try again.${RESET}"
+    exit 1
+  fi
+
+  $COMPOSE_CMD -f "$COMPOSE_FILE" up -d
+fi
 
 echo -e "  ${GREEN}✓${RESET} Containers started"
 

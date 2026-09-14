@@ -3,19 +3,24 @@
  * AgentLens CLI
  *
  * Commands:
- *   agentlens start          — Start the collector server and open the UI
- *   agentlens import         — Import historical Claude Code sessions
- *   agentlens transcripts    — List available transcript files
- *   agentlens install        — Install Claude Code hooks
- *   agentlens uninstall      — Remove Claude Code hooks
- *   agentlens status         — Show hook installation status
+ *   agentlens start          - Start the collector server and open the UI
+ *   agentlens import         - Import historical Claude Code sessions
+ *   agentlens transcripts    - List available transcript files
+ *   agentlens install        - Install Claude Code hooks
+ *   agentlens uninstall      - Remove Claude Code hooks
+ *   agentlens status         - Show hook installation status
  */
 
 import { Command } from "commander";
 import chalk from "chalk";
 import { startServer, DEFAULT_PORT } from "./server.js";
 import { installHooks, uninstallHooks, getHookStatus } from "./install.js";
-import { importTranscripts, listTranscripts, CLAUDE_PROJECTS_DIR } from "./importer.js";
+import {
+  importTranscripts,
+  listTranscripts,
+  CLAUDE_PROJECTS_DIR,
+  CURSOR_PROJECTS_DIR,
+} from "./importer.js";
 
 const program = new Command();
 
@@ -40,9 +45,13 @@ program
       await startServer({ port, dev: opts.dev });
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "EADDRINUSE") {
-        console.log(chalk.yellow(`\n  Port ${port} is already in use.`) +
-          chalk.dim("\n  AgentLens collector may already be running.\n"));
-        console.log(chalk.dim("  Dashboard: ") + chalk.cyan(`http://localhost:${port}`));
+        console.log(
+          chalk.yellow(`\n  Port ${port} is already in use.`) +
+            chalk.dim("\n  AgentLens collector may already be running.\n"),
+        );
+        console.log(
+          chalk.dim("  Dashboard: ") + chalk.cyan(`http://localhost:${port}`),
+        );
       } else {
         console.error(chalk.red("\n  Failed to start server:"), err);
         process.exit(1);
@@ -52,21 +61,31 @@ program
     const url = `http://localhost:${port}`;
     console.log(chalk.green("  ✓ Collector started"));
     console.log(chalk.dim("  Dashboard: ") + chalk.cyan(url));
-    console.log(chalk.dim("  DB:        ") + chalk.dim(process.env.DATABASE_URL ?? "postgresql://agentlens:agentlens@localhost:5432/agentlens"));
+    console.log(
+      chalk.dim("  DB:        ") +
+        chalk.dim(
+          process.env.DATABASE_URL ??
+            "postgresql://agentlens:agentlens@localhost:5432/agentlens",
+        ),
+    );
     console.log();
 
     if (opts.open) {
       try {
         const { default: open } = await import("open");
         await open(url);
-      } catch { /* optional */ }
+      } catch {
+        /* optional */
+      }
     }
 
     const status = getHookStatus();
     if (!status.postToolUse) {
       console.log(
         chalk.yellow("  ⚠ Claude Code hooks not installed.") +
-          chalk.dim("\n    Run: ") + chalk.cyan("agentlens install") + "\n"
+          chalk.dim("\n    Run: ") +
+          chalk.cyan("agentlens install") +
+          "\n",
       );
     } else {
       console.log(chalk.green("  ✓ Claude Code hooks installed") + "\n");
@@ -84,11 +103,14 @@ program
 
 program
   .command("import")
-  .description("Import all historical Claude Code sessions from transcripts")
+  .description(
+    "Import historical Claude Code + Cursor agent sessions from transcripts",
+  )
   .option("-f, --force", "Re-import sessions already in the database", false)
   .action(async (opts: { force: boolean }) => {
     printBanner();
-    console.log(chalk.dim(`  Scanning ${CLAUDE_PROJECTS_DIR}…\n`));
+    console.log(chalk.dim(`  Claude:  ${CLAUDE_PROJECTS_DIR}`));
+    console.log(chalk.dim(`  Cursor:  ${CURSOR_PROJECTS_DIR}\n`));
 
     const stats = await importTranscripts({
       force: opts.force,
@@ -100,7 +122,8 @@ program
     console.log(`  ${chalk.green(String(stats.imported))} sessions imported`);
     console.log(`  ${chalk.dim(String(stats.skipped))} sessions skipped`);
     console.log(`  ${chalk.dim(String(stats.scanned))} files scanned`);
-    if (stats.errors > 0) console.log(`  ${chalk.red(String(stats.errors))} errors`);
+    if (stats.errors > 0)
+      console.log(`  ${chalk.red(String(stats.errors))} errors`);
     console.log();
   });
 
@@ -108,34 +131,48 @@ program
 
 program
   .command("transcripts")
-  .description("List available Claude Code transcript files")
+  .description("List available Claude Code + Cursor transcript files")
   .action(async () => {
     printBanner();
     const list = await listTranscripts();
 
     if (list.length === 0) {
-      console.log(chalk.dim(`  No transcripts found at ${CLAUDE_PROJECTS_DIR}\n`));
+      console.log(chalk.dim(`  No transcripts found.`));
+      console.log(chalk.dim(`  Claude: ${CLAUDE_PROJECTS_DIR}`));
+      console.log(chalk.dim(`  Cursor: ${CURSOR_PROJECTS_DIR}\n`));
       return;
     }
 
     const imported = list.filter((t) => t.alreadyImported).length;
     const pending = list.length - imported;
 
-    console.log(`  ${chalk.bold(String(list.length))} transcript${list.length !== 1 ? "s" : ""} found`);
-    console.log(`  ${chalk.green(String(imported))} imported  ·  ${chalk.yellow(String(pending))} pending\n`);
+    console.log(
+      `  ${chalk.bold(String(list.length))} transcript${list.length !== 1 ? "s" : ""} found`,
+    );
+    console.log(
+      `  ${chalk.green(String(imported))} imported  ·  ${chalk.yellow(String(pending))} pending\n`,
+    );
 
     for (const t of list.slice(0, 30)) {
       const age = Math.floor((Date.now() - t.modifiedAt) / 1000 / 60);
       const ageStr = age < 60 ? `${age}m ago` : `${Math.floor(age / 60)}h ago`;
       const status = t.alreadyImported ? chalk.green("✓") : chalk.yellow("○");
       const kb = Math.round(t.sizeBytes / 1024);
-      console.log(`  ${status}  ${t.sessionId.slice(0, 8)}…  ${chalk.dim(t.cwd.slice(0, 40))}  ${chalk.dim(`${kb}KB  ${ageStr}`)}`);
+      const agent = chalk.dim((t.agent ?? "claude-code").padEnd(11));
+      console.log(
+        `  ${status}  ${agent}  ${t.sessionId.slice(0, 8)}…  ${chalk.dim(t.cwd.slice(0, 36))}  ${chalk.dim(`${kb}KB  ${ageStr}`)}`,
+      );
     }
 
-    if (list.length > 30) console.log(chalk.dim(`\n  … and ${list.length - 30} more`));
+    if (list.length > 30)
+      console.log(chalk.dim(`\n  … and ${list.length - 30} more`));
 
     if (pending > 0) {
-      console.log(chalk.dim(`\n  Run: `) + chalk.cyan("agentlens import") + chalk.dim(" to import pending sessions.\n"));
+      console.log(
+        chalk.dim(`\n  Run: `) +
+          chalk.cyan("agentlens import") +
+          chalk.dim(" to import pending sessions.\n"),
+      );
     } else {
       console.log();
     }
@@ -145,7 +182,9 @@ program
 
 program
   .command("install")
-  .description("Install AgentLens hooks into Claude Code (~/.claude/settings.json)")
+  .description(
+    "Install AgentLens hooks into Claude Code (~/.claude/settings.json)",
+  )
   .action(() => {
     printBanner();
     const { alreadyInstalled, settingsPath } = installHooks();
@@ -155,7 +194,10 @@ program
       console.log(chalk.green("  ✓ Hooks installed successfully"));
     }
     console.log(chalk.dim(`  Settings: ${settingsPath}\n`));
-    console.log(chalk.dim("  Now start the collector with: ") + chalk.cyan("agentlens start"));
+    console.log(
+      chalk.dim("  Now start the collector with: ") +
+        chalk.cyan("agentlens start"),
+    );
     console.log();
   });
 
@@ -186,7 +228,11 @@ program
     console.log(`  ${tick(s.notification)} Notification hook`);
     console.log(chalk.dim(`\n  Settings: ${s.settingsPath}\n`));
     if (!s.postToolUse) {
-      console.log(chalk.dim("  Run: ") + chalk.cyan("agentlens install") + chalk.dim(" to set up hooks.\n"));
+      console.log(
+        chalk.dim("  Run: ") +
+          chalk.cyan("agentlens install") +
+          chalk.dim(" to set up hooks.\n"),
+      );
     }
   });
 
@@ -195,7 +241,10 @@ program
 function printBanner(): void {
   console.log();
   console.log(
-    chalk.bold("  AgentLens") + chalk.dim(" v0.1") + "  " + chalk.dim("DevTools for AI coding agents")
+    chalk.bold("  AgentLens") +
+      chalk.dim(" v0.1") +
+      "  " +
+      chalk.dim("DevTools for AI coding agents"),
   );
   console.log(chalk.dim("  ─────────────────────────────────────────────"));
 }

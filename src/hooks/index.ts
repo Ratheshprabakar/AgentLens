@@ -31,7 +31,7 @@ async function main(): Promise<void> {
 
   const raw = Buffer.concat(chunks).toString("utf-8").trim();
   if (!raw) {
-    // No input — nothing to do
+    // No input - nothing to do
     process.exit(0);
   }
 
@@ -39,7 +39,7 @@ async function main(): Promise<void> {
   try {
     payload = JSON.parse(raw);
   } catch {
-    // Invalid JSON — ignore silently so Claude Code isn't interrupted
+    // Invalid JSON - ignore silently so Claude Code isn't interrupted
     process.exit(0);
   }
 
@@ -57,7 +57,7 @@ async function main(): Promise<void> {
 
     clearTimeout(timer);
   } catch {
-    // Collector not running or timed out — fail silently
+    // Collector not running or timed out - fail silently
     // We never want to interrupt Claude Code
   }
 

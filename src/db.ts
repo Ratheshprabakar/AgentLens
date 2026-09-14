@@ -1,15 +1,20 @@
 /**
- * AgentLens database layer — PostgreSQL via node-postgres (pg).
+ * AgentLens database layer - PostgreSQL via node-postgres (pg).
  *
  * Connection is configured via the DATABASE_URL environment variable:
  *   postgresql://user:password@host:5432/agentlens
  *
  * Falls back to a SQLite-compatible URL for local dev without Docker
- * (not used — PostgreSQL is always required in Docker).
+ * (not used - PostgreSQL is always required in Docker).
  */
 
 import { Pool, type PoolClient } from "pg";
-import type { AgentEvent, Session, SessionStatus, SessionSummary } from "./types.js";
+import type {
+  AgentEvent,
+  Session,
+  SessionStatus,
+  SessionSummary,
+} from "./types.js";
 
 // ─── Connection pool ──────────────────────────────────────────────────────────
 
@@ -82,7 +87,7 @@ const SCHEMA_SQL = `
 `;
 
 /**
- * Run the schema migrations. Called once on startup — idempotent.
+ * Run the schema migrations. Called once on startup - idempotent.
  * Retries for up to 30 seconds to handle PostgreSQL cold-start in Docker.
  */
 export async function initDB(retries = 12, delayMs = 2500): Promise<void> {
@@ -94,11 +99,14 @@ export async function initDB(retries = 12, delayMs = 2500): Promise<void> {
       return;
     } catch (err) {
       if (attempt === retries) {
-        console.error("[agentlens] Database init failed:", (err as Error).message);
+        console.error(
+          "[agentlens] Database init failed:",
+          (err as Error).message,
+        );
         throw err;
       }
       console.log(
-        `[agentlens] Waiting for PostgreSQL… (attempt ${attempt}/${retries})`
+        `[agentlens] Waiting for PostgreSQL… (attempt ${attempt}/${retries})`,
       );
       await new Promise((r) => setTimeout(r, delayMs));
     }
@@ -107,7 +115,7 @@ export async function initDB(retries = 12, delayMs = 2500): Promise<void> {
 
 // ─── Row → domain types ───────────────────────────────────────────────────────
 
-// pg returns column names in lowercase — matches our snake_case schema
+// pg returns column names in lowercase - matches our snake_case schema
 interface SessionRow {
   id: string;
   agent: string;
@@ -143,7 +151,7 @@ interface EventRow {
   duration: number | null;
   success: boolean | null;
   content: string | null;
-  metadata: Record<string, unknown> | null; // JSONB — pg parses it automatically
+  metadata: Record<string, unknown> | null; // JSONB - pg parses it automatically
 }
 
 function rowToSession(row: SessionRow): SessionSummary {
@@ -194,7 +202,7 @@ function rowToEvent(row: EventRow): AgentEvent {
 // ─── Session operations ───────────────────────────────────────────────────────
 
 export async function upsertSession(
-  partial: Partial<Session> & { id: string; startTime: number }
+  partial: Partial<Session> & { id: string; startTime: number },
 ): Promise<void> {
   await getPool().query(
     `INSERT INTO sessions (id, agent, model, task, cwd, start_time, status)
@@ -207,19 +215,25 @@ export async function upsertSession(
       partial.task ?? null,
       partial.cwd ?? null,
       partial.startTime,
-    ]
+    ],
   );
 }
 
-export async function endSession(id: string, status: SessionStatus): Promise<void> {
+export async function endSession(
+  id: string,
+  status: SessionStatus,
+): Promise<void> {
   await getPool().query(
     `UPDATE sessions SET end_time = $1, status = $2 WHERE id = $3`,
-    [Date.now(), status, id]
+    [Date.now(), status, id],
   );
 }
 
-export async function updateSessionCounts(sessionId: string, type: string): Promise<void> {
-  // Use a single CASE-based UPDATE — safe, no dynamic SQL
+export async function updateSessionCounts(
+  sessionId: string,
+  type: string,
+): Promise<void> {
+  // Use a single CASE-based UPDATE - safe, no dynamic SQL
   await getPool().query(
     `UPDATE sessions SET
        event_count = event_count + 1,
@@ -229,29 +243,42 @@ export async function updateSessionCounts(sessionId: string, type: string): Prom
        searches    = searches    + CASE WHEN $1 = 'search'                 THEN 1 ELSE 0 END,
        errors      = errors      + CASE WHEN $1 = 'error'                  THEN 1 ELSE 0 END
      WHERE id = $2`,
-    [type, sessionId]
+    [type, sessionId],
   );
 }
 
-export async function setSessionTask(sessionId: string, task: string): Promise<void> {
-  await getPool().query(
-    `UPDATE sessions SET task = $1 WHERE id = $2 AND task IS NULL`,
-    [task, sessionId]
-  );
+export async function setSessionTask(
+  sessionId: string,
+  task: string,
+  opts: { overwrite?: boolean } = {},
+): Promise<void> {
+  if (opts.overwrite) {
+    await getPool().query(`UPDATE sessions SET task = $1 WHERE id = $2`, [
+      task,
+      sessionId,
+    ]);
+  } else {
+    await getPool().query(
+      `UPDATE sessions SET task = $1 WHERE id = $2 AND (task IS NULL OR task = '')`,
+      [task, sessionId],
+    );
+  }
 }
 
 export async function getAllSessions(limit = 200): Promise<SessionSummary[]> {
   const result = await getPool().query<SessionRow>(
     `SELECT * FROM sessions ORDER BY start_time DESC LIMIT $1`,
-    [limit]
+    [limit],
   );
   return result.rows.map(rowToSession);
 }
 
-export async function getSessionById(id: string): Promise<SessionSummary | undefined> {
+export async function getSessionById(
+  id: string,
+): Promise<SessionSummary | undefined> {
   const result = await getPool().query<SessionRow>(
     `SELECT * FROM sessions WHERE id = $1`,
-    [id]
+    [id],
   );
   return result.rows[0] ? rowToSession(result.rows[0]) : undefined;
 }
@@ -277,16 +304,17 @@ export async function insertEvent(event: AgentEvent): Promise<void> {
       `INSERT INTO sessions (id, agent, start_time, status)
        VALUES ($1, $2, $3, 'running')
        ON CONFLICT (id) DO NOTHING`,
-      [event.sessionId, event.agent, event.timestamp]
+      [event.sessionId, event.agent, event.timestamp],
     );
 
     // Insert event (ignore duplicates)
-    await client.query(
+    const inserted = await client.query(
       `INSERT INTO events
          (id, session_id, agent, timestamp, type, tool, command, exit_code, output,
           file, additions, deletions, query, result_count, duration, success, content, metadata)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-       ON CONFLICT (id) DO NOTHING`,
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
       [
         event.id,
         event.sessionId,
@@ -306,21 +334,23 @@ export async function insertEvent(event: AgentEvent): Promise<void> {
         event.success ?? null,
         event.content ?? null,
         event.metadata ? JSON.stringify(event.metadata) : null,
-      ]
+      ],
     );
 
-    // Update session counters
-    await client.query(
-      `UPDATE sessions SET
-         event_count = event_count + 1,
-         file_reads  = file_reads  + CASE WHEN $1 = 'file_read'            THEN 1 ELSE 0 END,
-         file_edits  = file_edits  + CASE WHEN $1 = 'file_edit'            THEN 1 ELSE 0 END,
-         shell_cmds  = shell_cmds  + CASE WHEN $1 IN ('shell', 'test_run') THEN 1 ELSE 0 END,
-         searches    = searches    + CASE WHEN $1 = 'search'               THEN 1 ELSE 0 END,
-         errors      = errors      + CASE WHEN $1 = 'error'                THEN 1 ELSE 0 END
-       WHERE id = $2`,
-      [event.type, event.sessionId]
-    );
+    // Only bump counters when a new row was actually inserted
+    if (inserted.rowCount && inserted.rowCount > 0) {
+      await client.query(
+        `UPDATE sessions SET
+           event_count = event_count + 1,
+           file_reads  = file_reads  + CASE WHEN $1 = 'file_read'            THEN 1 ELSE 0 END,
+           file_edits  = file_edits  + CASE WHEN $1 = 'file_edit'            THEN 1 ELSE 0 END,
+           shell_cmds  = shell_cmds  + CASE WHEN $1 IN ('shell', 'test_run') THEN 1 ELSE 0 END,
+           searches    = searches    + CASE WHEN $1 = 'search'               THEN 1 ELSE 0 END,
+           errors      = errors      + CASE WHEN $1 = 'error'                THEN 1 ELSE 0 END
+         WHERE id = $2`,
+        [event.type, event.sessionId],
+      );
+    }
 
     await client.query("COMMIT");
   } catch (err) {
@@ -331,10 +361,12 @@ export async function insertEvent(event: AgentEvent): Promise<void> {
   }
 }
 
-export async function getEventsBySession(sessionId: string): Promise<AgentEvent[]> {
+export async function getEventsBySession(
+  sessionId: string,
+): Promise<AgentEvent[]> {
   const result = await getPool().query<EventRow>(
     `SELECT * FROM events WHERE session_id = $1 ORDER BY timestamp ASC`,
-    [sessionId]
+    [sessionId],
   );
   return result.rows.map(rowToEvent);
 }

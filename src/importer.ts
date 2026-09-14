@@ -22,6 +22,14 @@ import {
   getAllSessions,
 } from "./db.js";
 import type { AgentEvent, EventType, AgentName } from "./types.js";
+import {
+  importCursorTranscripts,
+  listCursorTranscripts,
+  watchCursorTranscripts,
+  CURSOR_PROJECTS_DIR,
+} from "./cursor-importer.js";
+
+export { CURSOR_PROJECTS_DIR };
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -30,15 +38,24 @@ import type { AgentEvent, EventType, AgentName } from "./types.js";
  * The CLAUDE_PROJECTS_DIR env var overrides the default.
  */
 export const CLAUDE_PROJECTS_DIR =
-  process.env.CLAUDE_PROJECTS_DIR ??
-  join(homedir(), ".claude", "projects");
+  process.env.CLAUDE_PROJECTS_DIR ?? join(homedir(), ".claude", "projects");
 
 // ─── Claude Code JSONL types ──────────────────────────────────────────────────
 
 type ContentBlock =
   | { type: "text"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; tool_use_id: string; content: string | ContentBlock[]; is_error?: boolean }
+  | {
+      type: "tool_use";
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+    }
+  | {
+      type: "tool_result";
+      tool_use_id: string;
+      content: string | ContentBlock[];
+      is_error?: boolean;
+    }
   | { type: string; [key: string]: unknown };
 
 interface ClaudeEntry {
@@ -73,6 +90,16 @@ export interface ImportStats {
   sessions: Array<{ id: string; task?: string; events: number }>;
 }
 
+function mergeStats(a: ImportStats, b: ImportStats): ImportStats {
+  return {
+    scanned: a.scanned + b.scanned,
+    imported: a.imported + b.imported,
+    skipped: a.skipped + b.skipped,
+    errors: a.errors + b.errors,
+    sessions: [...a.sessions, ...b.sessions],
+  };
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function decodeCwd(dirName: string): string {
@@ -103,19 +130,41 @@ function extractToolUses(content: string | ContentBlock[] | undefined): Array<{
   return content
     .filter((b) => b.type === "tool_use")
     .map((b) => {
-      const block = b as { type: "tool_use"; id: string; name: string; input: Record<string, unknown> };
-      return { id: block.id ?? randomUUID(), name: block.name ?? "unknown", input: block.input ?? {} };
+      const block = b as {
+        type: "tool_use";
+        id: string;
+        name: string;
+        input: Record<string, unknown>;
+      };
+      return {
+        id: block.id ?? randomUUID(),
+        name: block.name ?? "unknown",
+        input: block.input ?? {},
+      };
     });
 }
 
-function extractToolResults(content: string | ContentBlock[] | undefined): Map<string, { content: string; isError: boolean }> {
+function extractToolResults(
+  content: string | ContentBlock[] | undefined,
+): Map<string, { content: string; isError: boolean }> {
   const results = new Map<string, { content: string; isError: boolean }>();
   if (!content || typeof content === "string") return results;
   for (const block of content) {
     if (block.type !== "tool_result") continue;
-    const r = block as { type: "tool_result"; tool_use_id: string; content: string | ContentBlock[]; is_error?: boolean };
-    const text = typeof r.content === "string" ? r.content : contentToString(r.content as ContentBlock[]);
-    results.set(r.tool_use_id, { content: text.slice(0, 2000), isError: r.is_error ?? false });
+    const r = block as {
+      type: "tool_result";
+      tool_use_id: string;
+      content: string | ContentBlock[];
+      is_error?: boolean;
+    };
+    const text =
+      typeof r.content === "string"
+        ? r.content
+        : contentToString(r.content as ContentBlock[]);
+    results.set(r.tool_use_id, {
+      content: text.slice(0, 2000),
+      isError: r.is_error ?? false,
+    });
   }
   return results;
 }
@@ -123,15 +172,32 @@ function extractToolResults(content: string | ContentBlock[] | undefined): Map<s
 // ─── Tool → EventType ─────────────────────────────────────────────────────────
 
 const TOOL_TYPE_MAP: Record<string, EventType> = {
-  Read: "file_read", ReadFile: "file_read", LS: "file_read", ListDirectory: "file_read",
-  Write: "file_edit", WriteFile: "file_edit", CreateFile: "file_edit",
-  Edit: "file_edit", MultiEdit: "file_edit", StrReplace: "file_edit", NotebookEdit: "file_edit",
-  Bash: "shell", Shell: "shell",
-  Glob: "search", Find: "search", Grep: "search", GrepSearch: "search",
-  FileSearch: "search", Search: "search", RipgrepSearch: "search",
-  WebSearch: "web", WebFetch: "web",
-  Task: "subagent", Agent: "subagent",
-  TodoWrite: "agent_message", TodoRead: "agent_message",
+  Read: "file_read",
+  ReadFile: "file_read",
+  LS: "file_read",
+  ListDirectory: "file_read",
+  Write: "file_edit",
+  WriteFile: "file_edit",
+  CreateFile: "file_edit",
+  Edit: "file_edit",
+  MultiEdit: "file_edit",
+  StrReplace: "file_edit",
+  NotebookEdit: "file_edit",
+  Bash: "shell",
+  Shell: "shell",
+  Glob: "search",
+  Find: "search",
+  Grep: "search",
+  GrepSearch: "search",
+  FileSearch: "search",
+  Search: "search",
+  RipgrepSearch: "search",
+  WebSearch: "web",
+  WebFetch: "web",
+  Task: "subagent",
+  Agent: "subagent",
+  TodoWrite: "agent_message",
+  TodoRead: "agent_message",
 };
 
 function toolToEventType(name: string): EventType {
@@ -143,7 +209,7 @@ function toolCallToEvent(
   agent: AgentName,
   tool: { id: string; name: string; input: Record<string, unknown> },
   result: { content: string; isError: boolean } | undefined,
-  timestamp: number
+  timestamp: number,
 ): AgentEvent {
   const type = toolToEventType(tool.name);
   const success = !result?.isError;
@@ -169,19 +235,26 @@ function toolCallToEvent(
       };
 
     case "file_edit": {
-      const newStr = (tool.input.new_string ?? tool.input.content ?? "") as string;
+      const newStr = (tool.input.new_string ??
+        tool.input.content ??
+        "") as string;
       const oldStr = (tool.input.old_string ?? "") as string;
       return {
         ...base,
         file: (tool.input.path ?? tool.input.file_path) as string | undefined,
         additions: newStr ? newStr.split("\n").length : undefined,
-        deletions: oldStr ? Math.max(0, oldStr.split("\n").length - 1) : undefined,
+        deletions: oldStr
+          ? Math.max(0, oldStr.split("\n").length - 1)
+          : undefined,
       };
     }
 
     case "shell": {
       const command = (tool.input.command ?? tool.input.cmd ?? "") as string;
-      const isTest = /\b(jest|vitest|pytest|go test|npm test|yarn test|pnpm test|mocha|jasmine|rspec|cargo test)\b/i.test(command);
+      const isTest =
+        /\b(jest|vitest|pytest|go test|npm test|yarn test|pnpm test|mocha|jasmine|rspec|cargo test)\b/i.test(
+          command,
+        );
       let exitCode: number | undefined;
       if (output) {
         const m = output.match(/exit\s*code[:\s]+(\d+)/i);
@@ -198,16 +271,37 @@ function toolCallToEvent(
     }
 
     case "search": {
-      const query = (tool.input.pattern ?? tool.input.query ?? tool.input.glob ?? tool.input.regex) as string | undefined;
-      const resultCount = output ? output.split("\n").filter((l) => l.trim()).length : undefined;
-      return { ...base, query: query?.slice(0, 300), resultCount, output: output?.slice(0, 500) };
+      const query = (tool.input.pattern ??
+        tool.input.query ??
+        tool.input.glob ??
+        tool.input.regex) as string | undefined;
+      const resultCount = output
+        ? output.split("\n").filter((l) => l.trim()).length
+        : undefined;
+      return {
+        ...base,
+        query: query?.slice(0, 300),
+        resultCount,
+        output: output?.slice(0, 500),
+      };
     }
 
     case "web":
-      return { ...base, query: ((tool.input.url ?? tool.input.query) as string | undefined)?.slice(0, 500), output: output?.slice(0, 500) };
+      return {
+        ...base,
+        query: (
+          (tool.input.url ?? tool.input.query) as string | undefined
+        )?.slice(0, 500),
+        output: output?.slice(0, 500),
+      };
 
     case "subagent":
-      return { ...base, content: ((tool.input.description ?? tool.input.prompt) as string | undefined)?.slice(0, 500) };
+      return {
+        ...base,
+        content: (
+          (tool.input.description ?? tool.input.prompt) as string | undefined
+        )?.slice(0, 500),
+      };
 
     default:
       return { ...base, output: output?.slice(0, 500) };
@@ -227,7 +321,10 @@ interface ParsedSession {
   events: AgentEvent[];
 }
 
-export function parseTranscript(filePath: string, encodedProjectDir: string): ParsedSession | null {
+export function parseTranscript(
+  filePath: string,
+  encodedProjectDir: string,
+): ParsedSession | null {
   const sessionId = basename(filePath, ".jsonl");
   const cwd = decodeCwd(encodedProjectDir);
   const agent: AgentName = "claude-code";
@@ -258,10 +355,15 @@ export function parseTranscript(filePath: string, encodedProjectDir: string): Pa
 
   if (entries[0]?.timestamp) startTime = parseTs(entries[0].timestamp);
 
-  const resultEntry = entries.find((e) => e.type === "result" || e.subtype === "final_answer");
+  const resultEntry = entries.find(
+    (e) => e.type === "result" || e.subtype === "final_answer",
+  );
   if (resultEntry) {
     endTime = parseTs(resultEntry.timestamp);
-    status = resultEntry.isError || resultEntry.result === "error" ? "failed" : "success";
+    status =
+      resultEntry.isError || resultEntry.result === "error"
+        ? "failed"
+        : "success";
   } else {
     const lastTs = entries[entries.length - 1]?.timestamp;
     if (lastTs) endTime = parseTs(lastTs);
@@ -269,11 +371,20 @@ export function parseTranscript(filePath: string, encodedProjectDir: string): Pa
 
   for (const e of entries) {
     const m = e.model ?? e.message?.model;
-    if (m) { model = String(m); break; }
+    if (m) {
+      model = String(m);
+      break;
+    }
   }
 
   const events: AgentEvent[] = [];
-  const pendingToolCalls = new Map<string, { tool: { id: string; name: string; input: Record<string, unknown> }; timestamp: number }>();
+  const pendingToolCalls = new Map<
+    string,
+    {
+      tool: { id: string; name: string; input: Record<string, unknown> };
+      timestamp: number;
+    }
+  >();
 
   events.push({
     id: randomUUID(),
@@ -297,7 +408,15 @@ export function parseTranscript(filePath: string, encodedProjectDir: string): Pa
         for (const [toolUseId, result] of results) {
           const pending = pendingToolCalls.get(toolUseId);
           if (pending) {
-            events.push(toolCallToEvent(sessionId, agent, pending.tool, result, pending.timestamp));
+            events.push(
+              toolCallToEvent(
+                sessionId,
+                agent,
+                pending.tool,
+                result,
+                pending.timestamp,
+              ),
+            );
             pendingToolCalls.delete(toolUseId);
           }
         }
@@ -313,16 +432,34 @@ export function parseTranscript(filePath: string, encodedProjectDir: string): Pa
     }
 
     if (entry.type === "result" || entry.subtype === "final_answer") {
-      const text = typeof entry.result === "string" ? entry.result : contentToString(msgContent);
+      const text =
+        typeof entry.result === "string"
+          ? entry.result
+          : contentToString(msgContent);
       if (text) {
-        events.push({ id: randomUUID(), sessionId, agent, timestamp: ts, type: "agent_message", content: text.slice(0, 1000) });
+        events.push({
+          id: randomUUID(),
+          sessionId,
+          agent,
+          timestamp: ts,
+          type: "agent_message",
+          content: text.slice(0, 1000),
+        });
       }
     }
   }
 
   // Flush unmatched tool calls
   for (const [, pending] of pendingToolCalls) {
-    events.push(toolCallToEvent(sessionId, agent, pending.tool, undefined, pending.timestamp));
+    events.push(
+      toolCallToEvent(
+        sessionId,
+        agent,
+        pending.tool,
+        undefined,
+        pending.timestamp,
+      ),
+    );
   }
 
   if (endTime) {
@@ -342,11 +479,19 @@ export function parseTranscript(filePath: string, encodedProjectDir: string): Pa
 
 // ─── Import all transcripts ───────────────────────────────────────────────────
 
-export async function importTranscripts(opts: {
-  force?: boolean;
-  onProgress?: (msg: string) => void;
-} = {}): Promise<ImportStats> {
-  const stats: ImportStats = { scanned: 0, imported: 0, skipped: 0, errors: 0, sessions: [] };
+async function importClaudeTranscripts(
+  opts: {
+    force?: boolean;
+    onProgress?: (msg: string) => void;
+  } = {},
+): Promise<ImportStats> {
+  const stats: ImportStats = {
+    scanned: 0,
+    imported: 0,
+    skipped: 0,
+    errors: 0,
+    sessions: [],
+  };
 
   let projectDirs: string[];
   try {
@@ -406,7 +551,7 @@ export async function importTranscripts(opts: {
           try {
             await insertEvent(event);
           } catch {
-            // Duplicate or malformed — skip
+            // Duplicate or malformed - skip
           }
         }
 
@@ -415,8 +560,14 @@ export async function importTranscripts(opts: {
         }
 
         stats.imported++;
-        stats.sessions.push({ id: parsed.sessionId, task: parsed.task, events: parsed.events.length });
-        opts.onProgress?.(`Imported ${parsed.sessionId.slice(0, 8)}… (${parsed.events.length} events)`);
+        stats.sessions.push({
+          id: parsed.sessionId,
+          task: parsed.task,
+          events: parsed.events.length,
+        });
+        opts.onProgress?.(
+          `Claude ${parsed.sessionId.slice(0, 8)}… (${parsed.events.length} events)`,
+        );
       } catch (err) {
         stats.errors++;
         opts.onProgress?.(`Error importing ${file}: ${String(err)}`);
@@ -427,11 +578,27 @@ export async function importTranscripts(opts: {
   return stats;
 }
 
+/**
+ * Import historical sessions from Claude Code AND Cursor transcripts.
+ */
+export async function importTranscripts(
+  opts: {
+    force?: boolean;
+    onProgress?: (msg: string) => void;
+  } = {},
+): Promise<ImportStats> {
+  const claude = await importClaudeTranscripts(opts);
+  const cursor = await importCursorTranscripts(opts);
+  return mergeStats(claude, cursor);
+}
+
 // ─── Watch mode ───────────────────────────────────────────────────────────────
 
 const watchedFiles = new Map<string, number>();
 
-export function watchTranscripts(onChange: (sessionId: string) => void): () => void {
+function watchClaudeTranscripts(
+  onChange: (sessionId: string) => void,
+): () => void {
   let running = true;
 
   const tick = async () => {
@@ -487,7 +654,11 @@ export function watchTranscripts(onChange: (sessionId: string) => void): () => v
 
           if (parsed.task) await setSessionTask(parsed.sessionId, parsed.task);
           for (const event of parsed.events) {
-            try { await insertEvent(event); } catch { /* deduplicate */ }
+            try {
+              await insertEvent(event);
+            } catch {
+              /* deduplicate */
+            }
           }
           if (parsed.endTime) await endSession(parsed.sessionId, parsed.status);
 
@@ -499,13 +670,24 @@ export function watchTranscripts(onChange: (sessionId: string) => void): () => v
     }
   };
 
-  // Initial scan then poll every 5 s
   void tick();
   const timer = setInterval(() => void tick(), 5000);
 
   return () => {
     running = false;
     clearInterval(timer);
+  };
+}
+
+/** Watch Claude Code + Cursor transcript directories for changes. */
+export function watchTranscripts(
+  onChange: (sessionId: string) => void,
+): () => void {
+  const stopClaude = watchClaudeTranscripts(onChange);
+  const stopCursor = watchCursorTranscripts(onChange);
+  return () => {
+    stopClaude();
+    stopCursor();
   };
 }
 
@@ -519,9 +701,10 @@ export interface TranscriptInfo {
   sizeBytes: number;
   modifiedAt: number;
   alreadyImported: boolean;
+  agent?: "claude-code" | "cursor";
 }
 
-export async function listTranscripts(): Promise<TranscriptInfo[]> {
+async function listClaudeTranscripts(): Promise<TranscriptInfo[]> {
   const results: TranscriptInfo[] = [];
   const importedIds = new Set((await getAllSessions(10000)).map((s) => s.id));
 
@@ -560,6 +743,7 @@ export async function listTranscripts(): Promise<TranscriptInfo[]> {
           sizeBytes: s.size,
           modifiedAt: s.mtimeMs,
           alreadyImported: importedIds.has(sessionId),
+          agent: "claude-code",
         });
       } catch {
         continue;
@@ -567,5 +751,14 @@ export async function listTranscripts(): Promise<TranscriptInfo[]> {
     }
   }
 
-  return results.sort((a, b) => b.modifiedAt - a.modifiedAt);
+  return results;
+}
+
+/** List Claude Code + Cursor transcripts available on disk. */
+export async function listTranscripts(): Promise<TranscriptInfo[]> {
+  const [claude, cursor] = await Promise.all([
+    listClaudeTranscripts(),
+    listCursorTranscripts(),
+  ]);
+  return [...claude, ...cursor].sort((a, b) => b.modifiedAt - a.modifiedAt);
 }

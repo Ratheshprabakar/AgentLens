@@ -1,177 +1,282 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { getSessions, deleteSession, listTranscripts, runImport, type Session, type TranscriptInfo, type ImportStats } from "../api.ts";
+import { motion } from "framer-motion";
+import {
+  getSessions,
+  deleteSession,
+  listTranscripts,
+  runImport,
+  type Session,
+  type TranscriptInfo,
+  type ImportStats,
+} from "../api.ts";
+import {
+  formatDuration,
+  formatClock,
+  shortenPath,
+  agentLabel,
+  matchesAgent,
+  type AgentFilter,
+} from "../lib/format.ts";
+import {
+  pageVariants,
+  pageTransition,
+  fadeUp,
+  listVariants,
+  rowVariants,
+} from "../lib/motion.ts";
+import ShellFooter from "../components/ShellFooter.tsx";
 import "./Sessions.css";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const MotionLink = motion.create(Link);
 
-function formatDuration(ms?: number): string {
-  if (!ms || ms < 0) return "—";
-  const totalSec = Math.floor(ms / 1000);
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  if (min === 0) return `${sec}s`;
-  return `${min}m ${sec.toString().padStart(2, "0")}s`;
-}
+type GroupMode = "day" | "project";
 
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  const now = new Date();
-  const isToday =
-    d.getDate() === now.getDate() &&
-    d.getMonth() === now.getMonth() &&
-    d.getFullYear() === now.getFullYear();
-
-  if (isToday) {
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-  return d.toLocaleDateString([], { month: "short", day: "numeric" }) +
-    " " +
-    d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function groupSessionsByDay(sessions: Session[]): Array<{ label: string; sessions: Session[] }> {
+function groupByDay(
+  sessions: Session[],
+): Array<{ label: string; sessions: Session[] }> {
   const groups = new Map<string, Session[]>();
   const now = new Date();
 
   for (const s of sessions) {
     const d = new Date(s.startTime);
+    const diffDays = Math.floor((now.getTime() - d.getTime()) / 86_400_000);
     let label: string;
-
-    const diffDays = Math.floor(
-      (now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24)
-    );
     if (diffDays === 0) label = "Today";
     else if (diffDays === 1) label = "Yesterday";
-    else if (diffDays < 7) label = d.toLocaleDateString([], { weekday: "long" });
-    else label = d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
+    else if (diffDays < 7)
+      label = d.toLocaleDateString([], { weekday: "long" });
+    else
+      label = d.toLocaleDateString([], {
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+      });
 
     if (!groups.has(label)) groups.set(label, []);
     groups.get(label)!.push(s);
   }
 
-  return Array.from(groups.entries()).map(([label, sessions]) => ({ label, sessions }));
+  return Array.from(groups.entries()).map(([label, sessions]) => ({
+    label,
+    sessions,
+  }));
 }
 
-// ─── Status badge ─────────────────────────────────────────────────────────────
-
-function StatusBadge({ status }: { status: Session["status"] }) {
-  const map = {
-    running: { label: "Running", className: "badge badge--running" },
-    success: { label: "Success", className: "badge badge--success" },
-    failed:  { label: "Failed",  className: "badge badge--error" },
-    unknown: { label: "Unknown", className: "badge badge--neutral" },
-  };
-  const { label, className } = map[status] ?? map.unknown;
-  return <span className={className}>{label}</span>;
+function projectLabel(cwd?: string): string {
+  if (!cwd) return "No project";
+  const short = shortenPath(cwd);
+  const parts = short.split("/").filter(Boolean);
+  if (parts.length <= 2) return short;
+  return parts.slice(-2).join("/");
 }
 
-// ─── Session card ─────────────────────────────────────────────────────────────
+/** Group by cwd; most-recent session first within each project; projects by latest activity. */
+function groupByProject(
+  sessions: Session[],
+): Array<{ label: string; sessions: Session[] }> {
+  const groups = new Map<string, Session[]>();
 
-function SessionCard({
+  for (const s of sessions) {
+    const label = projectLabel(s.cwd);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label)!.push(s);
+  }
+
+  return Array.from(groups.entries())
+    .map(([label, list]) => ({
+      label,
+      sessions: [...list].sort((a, b) => b.startTime - a.startTime),
+      latest: Math.max(...list.map((s) => s.startTime)),
+    }))
+    .sort((a, b) => b.latest - a.latest)
+    .map(({ label, sessions }) => ({ label, sessions }));
+}
+
+type ActivitySeg = { key: string; n: number; color: string };
+
+function activitySegments(session: Session): ActivitySeg[] {
+  const segs: ActivitySeg[] = [
+    { key: "rd", n: session.fileReads, color: "var(--ev-read)" },
+    { key: "ed", n: session.fileEdits, color: "var(--ev-edit)" },
+    { key: "sh", n: session.shellCommands, color: "var(--ev-shell)" },
+    { key: "sr", n: session.searches, color: "var(--ev-search)" },
+  ];
+  if (session.errors > 0) {
+    segs.push({ key: "er", n: session.errors, color: "var(--ev-error)" });
+  }
+  return segs.filter((s) => s.n > 0);
+}
+
+/** 1 = quiet … 4 = heavy - relative to the busiest session in the current list. */
+function densityLevel(eventCount: number, maxEvents: number): 1 | 2 | 3 | 4 {
+  if (maxEvents <= 0 || eventCount <= 0) return 1;
+  const r = eventCount / maxEvents;
+  if (r >= 0.7) return 4;
+  if (r >= 0.35) return 3;
+  if (r >= 0.12) return 2;
+  return 1;
+}
+
+function statusMark(status: Session["status"]): {
+  label: string;
+  className: string;
+} {
+  switch (status) {
+    case "running":
+      return { label: "live", className: "row-status row-status--live" };
+    case "failed":
+      return { label: "failed", className: "row-status row-status--bad" };
+    case "success":
+      return { label: "done", className: "row-status row-status--done" };
+    default:
+      return { label: "-", className: "row-status" };
+  }
+}
+
+function SessionRow({
   session,
   onDelete,
+  density,
+  hideCwd,
 }: {
   session: Session;
   onDelete: (id: string) => void;
+  density: 1 | 2 | 3 | 4;
+  hideCwd?: boolean;
 }) {
   const [confirming, setConfirming] = useState(false);
-
   const duration =
     session.duration ??
-    (session.endTime ? session.endTime - session.startTime : Date.now() - session.startTime);
+    (session.endTime
+      ? session.endTime - session.startTime
+      : Date.now() - session.startTime);
+  const status = statusMark(session.status);
+  const agentTone =
+    session.agent === "cursor"
+      ? "cursor"
+      : session.agent === "claude-code"
+        ? "claude"
+        : "other";
+  const segs = activitySegments(session);
+  const totalSeg = segs.reduce((sum, s) => sum + s.n, 0);
+  const stripTitle =
+    segs.length === 0
+      ? `${session.eventCount} events`
+      : [
+          ...segs.map((s) => `${s.n} ${s.key}`),
+          `${session.eventCount} ev`,
+        ].join(" · ");
 
   const handleDelete = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (confirming) {
-      onDelete(session.id);
-    } else {
+    if (confirming) onDelete(session.id);
+    else {
       setConfirming(true);
-      setTimeout(() => setConfirming(false), 3000);
+      setTimeout(() => setConfirming(false), 2800);
     }
   };
 
   return (
-    <Link to={`/sessions/${session.id}`} className="session-card">
-      <div className="session-card__header">
-        <div className="session-card__title">
-          <span className="session-card__task">
-            {session.task ?? "Unnamed session"}
+    <MotionLink
+      to={`/sessions/${session.id}`}
+      className={`session-row session-row--d${density}`}
+      variants={rowVariants}
+      whileHover={{ backgroundColor: "rgba(28, 33, 27, 0.85)" }}
+      transition={{ duration: 0.12 }}
+    >
+      <span
+        className={`session-row__rail session-row__rail--${agentTone} session-row__rail--d${density}`}
+        aria-hidden
+      />
+      <div className="session-row__main">
+        <div className="session-row__title-line">
+          <span className="session-row__title truncate">
+            {session.task ?? "Untitled session"}
           </span>
-          <StatusBadge status={session.status} />
+          <span className={status.className}>{status.label}</span>
         </div>
-        <div className="session-card__meta">
-          <span className="session-card__agent">{session.agent}</span>
-          <span className="session-card__dot">·</span>
-          <span>{formatTime(session.startTime)}</span>
-          <span className="session-card__dot">·</span>
+        <div className="session-row__meta mono">
+          <span
+            className={`session-row__agent session-row__agent--${agentTone}`}
+          >
+            {agentLabel(session.agent)}
+          </span>
+          <span className="session-row__sep">/</span>
+          <span>{formatClock(session.startTime)}</span>
+          <span className="session-row__sep">/</span>
           <span>{formatDuration(duration)}</span>
+          {!hideCwd && session.cwd && (
+            <>
+              <span className="session-row__sep">/</span>
+              <span className="session-row__cwd truncate">
+                {shortenPath(session.cwd)}
+              </span>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="session-card__stats">
-        <Stat label="events" value={session.eventCount} />
-        <Stat label="reads" value={session.fileReads} />
-        <Stat label="edits" value={session.fileEdits} />
-        <Stat label="shell" value={session.shellCommands} />
-        {session.errors > 0 && (
-          <Stat label="errors" value={session.errors} danger />
-        )}
+      <div
+        className="session-row__activity"
+        title={stripTitle}
+        aria-label={stripTitle}
+      >
+        <div className="activity-strip" aria-hidden>
+          {totalSeg === 0 ? (
+            <span className="activity-strip__empty" />
+          ) : (
+            segs.map((s) => (
+              <span
+                key={s.key}
+                className="activity-strip__seg"
+                style={{
+                  flexGrow: s.n,
+                  background: s.color,
+                }}
+              />
+            ))
+          )}
+        </div>
+        <span className="activity-strip__n mono">{session.eventCount}</span>
       </div>
 
       <button
-        className={`session-card__delete ${confirming ? "session-card__delete--confirming" : ""}`}
+        type="button"
+        className={`session-row__delete ${confirming ? "session-row__delete--confirm" : ""}`}
         onClick={handleDelete}
-        title="Delete session"
-        aria-label="Delete session"
+        aria-label={confirming ? "Confirm delete" : "Delete session"}
       >
-        {confirming ? "Confirm" : "×"}
+        {confirming ? "delete?" : "×"}
       </button>
-    </Link>
+    </MotionLink>
   );
 }
 
-function Stat({
-  label,
-  value,
-  danger,
-}: {
-  label: string;
-  value: number;
-  danger?: boolean;
-}) {
-  return (
-    <span className={`session-stat ${danger ? "session-stat--danger" : ""}`}>
-      <span className="session-stat__value">{value}</span>
-      <span className="session-stat__label">{label}</span>
-    </span>
-  );
-}
-
-// ─── Import panel ─────────────────────────────────────────────────────────────
-
-function ImportPanel({ onImported }: { onImported: () => void }) {
+function ImportBar({ onImported }: { onImported: () => void }) {
   const [transcripts, setTranscripts] = useState<TranscriptInfo[] | null>(null);
   const [importing, setImporting] = useState(false);
   const [lastStats, setLastStats] = useState<ImportStats | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [open, setOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const data = await listTranscripts();
-      setTranscripts(data.transcripts);
+      setTranscripts((await listTranscripts()).transcripts);
     } catch {
       setTranscripts([]);
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  const pending = transcripts?.filter((t) => !t.alreadyImported) ?? [];
-  const imported = transcripts?.filter((t) => t.alreadyImported) ?? [];
+  if (!transcripts || transcripts.length === 0) return null;
 
-  const handleImport = async (force = false) => {
+  const pending = transcripts.filter((t) => !t.alreadyImported);
+
+  const run = async (force: boolean) => {
     setImporting(true);
     try {
       const result = await runImport(force);
@@ -183,116 +288,98 @@ function ImportPanel({ onImported }: { onImported: () => void }) {
     }
   };
 
-  if (!transcripts) return null;
-  if (transcripts.length === 0) return null;
-
   return (
-    <div className="import-panel">
-      <div className="import-panel__header" onClick={() => setExpanded((v) => !v)}>
-        <div className="import-panel__info">
-          <span className="import-panel__icon">⤓</span>
-          <span className="import-panel__title">
-            {pending.length > 0
-              ? `${pending.length} session${pending.length !== 1 ? "s" : ""} available to import`
-              : `${imported.length} sessions imported from transcripts`}
+    <div className="import-bar">
+      <button
+        type="button"
+        className="import-bar__toggle"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="import-bar__label">
+          {pending.length > 0
+            ? `${pending.length} transcript${pending.length === 1 ? "" : "s"} ready`
+            : `${transcripts.length} transcripts on disk`}
+        </span>
+        <span className="import-bar__chev mono">{open ? "hide" : "show"}</span>
+      </button>
+
+      <div className="import-bar__actions">
+        {lastStats && (
+          <span className="import-bar__hint mono">
+            {lastStats.imported > 0
+              ? `+${lastStats.imported} imported`
+              : "up to date"}
           </span>
-          {pending.length > 0 && (
-            <span className="import-panel__sub">from ~/.claude/projects/</span>
-          )}
-        </div>
-        <div className="import-panel__actions" onClick={(e) => e.stopPropagation()}>
-          {lastStats && (
-            <span className="import-panel__result">
-              {lastStats.imported > 0
-                ? `✓ ${lastStats.imported} imported`
-                : "Already up-to-date"}
-            </span>
-          )}
-          {pending.length > 0 && (
-            <button
-              className="btn btn--primary"
-              onClick={() => void handleImport(false)}
-              disabled={importing}
-            >
-              {importing ? "Importing…" : `Import ${pending.length} session${pending.length !== 1 ? "s" : ""}`}
-            </button>
-          )}
-          {imported.length > 0 && (
-            <button
-              className="btn btn--ghost"
-              onClick={() => void handleImport(true)}
-              disabled={importing}
-              title="Re-import all transcripts (overwrites existing)"
-            >
-              ↺ Re-import all
-            </button>
-          )}
-          <button className="btn btn--ghost import-panel__toggle" aria-label="Toggle details">
-            {expanded ? "▲" : "▼"}
+        )}
+        {pending.length > 0 && (
+          <button
+            type="button"
+            className="al-btn al-btn--primary"
+            disabled={importing}
+            onClick={() => void run(false)}
+          >
+            {importing ? "Importing…" : "Import"}
           </button>
-        </div>
+        )}
+        <button
+          type="button"
+          className="al-btn"
+          disabled={importing}
+          onClick={() => void run(true)}
+          title="Re-parse all transcripts"
+        >
+          Re-sync
+        </button>
       </div>
 
-      {expanded && transcripts.length > 0 && (
-        <div className="import-panel__list">
-          {transcripts.slice(0, 20).map((t) => {
-            const age = Math.floor((Date.now() - t.modifiedAt) / 1000 / 60);
-            const ageStr = age < 60 ? `${age}m ago` : age < 1440 ? `${Math.floor(age / 60)}h ago` : `${Math.floor(age / 1440)}d ago`;
-            const kb = Math.round(t.sizeBytes / 1024);
-            return (
-              <div key={t.sessionId} className="import-panel__item">
-                <span className={`import-panel__item-status ${t.alreadyImported ? "import-panel__item-status--done" : "import-panel__item-status--pending"}`}>
-                  {t.alreadyImported ? "✓" : "○"}
-                </span>
-                <span className="import-panel__item-id">{t.sessionId.slice(0, 8)}…</span>
-                <span className="import-panel__item-cwd">{t.cwd.replace(/^\/Users\/[^/]+/, "~")}</span>
-                <span className="import-panel__item-meta">{kb}KB · {ageStr}</span>
-              </div>
-            );
-          })}
-          {transcripts.length > 20 && (
-            <div className="import-panel__more">…and {transcripts.length - 20} more files</div>
-          )}
+      {open && (
+        <div className="import-bar__list">
+          {transcripts.slice(0, 16).map((t) => (
+            <div
+              key={`${t.agent}-${t.sessionId}`}
+              className="import-bar__item mono"
+            >
+              <span className={t.alreadyImported ? "dot dot--on" : "dot"} />
+              <span className="import-bar__agent">
+                {t.agent === "cursor" ? "cursor" : "claude"}
+              </span>
+              <span className="import-bar__id">{t.sessionId.slice(0, 8)}</span>
+              <span className="import-bar__cwd truncate">
+                {shortenPath(t.cwd)}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-// ─── Empty state ──────────────────────────────────────────────────────────────
-
 function EmptyState() {
   return (
-    <div className="empty-state">
-      <div className="empty-state__icon">◎</div>
-      <div className="empty-state__title">No sessions yet</div>
-      <div className="empty-state__body">
-        Sessions will appear here as Claude Code agents run.
-        <br />
-        Make sure the collector is running and hooks are installed.
-      </div>
-      <div className="empty-state__steps">
-        <div className="empty-state__step">
-          <code>agentlens install</code>
-          <span>Install Claude Code hooks</span>
-        </div>
-        <div className="empty-state__step">
-          <code>agentlens start</code>
-          <span>Start the collector</span>
-        </div>
+    <div className="empty">
+      <p className="empty__kicker mono">collector online · no sessions yet</p>
+      <h2 className="empty__title">Watch your agents work</h2>
+      <p className="empty__body">
+        Import Cursor and Claude Code transcripts, or install Claude hooks for
+        live capture.
+      </p>
+      <div className="empty__cmds">
+        <code>bun src/cli.ts import</code>
+        <code>bun src/cli.ts install</code>
       </div>
     </div>
   );
 }
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function SessionsPage() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [lastRefresh, setLastRefresh] = useState(Date.now());
+  const [agent, setAgent] = useState<AgentFilter>("all");
+  const [groupMode, setGroupMode] = useState<GroupMode>("day");
+  const [tick, setTick] = useState(Date.now());
 
   const load = useCallback(async () => {
     try {
@@ -308,13 +395,11 @@ export default function SessionsPage() {
 
   useEffect(() => {
     void load();
-  }, [load, lastRefresh]);
+  }, [load, tick]);
 
-  // Auto-refresh every 5 seconds if any session is running
   useEffect(() => {
-    const hasRunning = sessions.some((s) => s.status === "running");
-    if (!hasRunning) return;
-    const timer = setInterval(() => setLastRefresh(Date.now()), 5000);
+    if (!sessions.some((s) => s.status === "running")) return;
+    const timer = setInterval(() => setTick(Date.now()), 5000);
     return () => clearInterval(timer);
   }, [sessions]);
 
@@ -323,140 +408,235 @@ export default function SessionsPage() {
       await deleteSession(id);
       setSessions((prev) => prev.filter((s) => s.id !== id));
     } catch {
-      // Ignore
+      /* ignore */
     }
   };
 
-  const filtered = search
-    ? sessions.filter(
-        (s) =>
-          s.task?.toLowerCase().includes(search.toLowerCase()) ||
-          s.agent.toLowerCase().includes(search.toLowerCase())
-      )
-    : sessions;
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return sessions.filter((s) => {
+      if (!matchesAgent(s.agent, agent)) return false;
+      if (!q) return true;
+      return (
+        s.task?.toLowerCase().includes(q) ||
+        s.agent.toLowerCase().includes(q) ||
+        s.cwd?.toLowerCase().includes(q) ||
+        s.id.toLowerCase().includes(q)
+      );
+    });
+  }, [sessions, search, agent]);
 
-  const groups = groupSessionsByDay(filtered);
-
-  const runningCount = sessions.filter((s) => s.status === "running").length;
-  const successRate =
-    sessions.length > 0
-      ? Math.round(
-          (sessions.filter((s) => s.status === "success").length / sessions.filter((s) => s.status !== "running").length) *
-            100
-        )
-      : 0;
+  const groups = useMemo(
+    () =>
+      groupMode === "project" ? groupByProject(filtered) : groupByDay(filtered),
+    [filtered, groupMode],
+  );
+  const maxEvents = useMemo(
+    () => filtered.reduce((m, s) => Math.max(m, s.eventCount), 0),
+    [filtered],
+  );
+  const running = sessions.filter((s) => s.status === "running").length;
+  const cursorN = sessions.filter((s) => s.agent === "cursor").length;
+  const claudeN = sessions.filter((s) => s.agent === "claude-code").length;
 
   return (
-    <div className="sessions-page">
-      {/* Header */}
-      <header className="page-header">
-        <div className="page-header__brand">
-          <span className="page-header__logo">◉</span>
-          <span className="page-header__title">AgentLens</span>
-          <span className="page-header__tag">v0.1</span>
-        </div>
-        <div className="page-header__right">
-          {runningCount > 0 && (
-            <span className="live-badge">
-              <span className="live-badge__dot" />
-              {runningCount} running
-            </span>
-          )}
-          <button
-            className="btn btn--ghost"
-            onClick={() => setLastRefresh(Date.now())}
-            title="Refresh"
-          >
-            ↻ Refresh
-          </button>
+    <motion.div
+      className="sessions"
+      variants={pageVariants}
+      initial="initial"
+      animate="animate"
+      exit="exit"
+      transition={pageTransition}
+    >
+      <header className="shell-top">
+        <div className="shell-top__inner">
+          <Link to="/" className="brand" aria-label="AgentLens home">
+            <span className="brand__mark" aria-hidden />
+            <div className="brand__text">
+              <span className="brand__name">AgentLens</span>
+              <span className="brand__tag mono">
+                devtools for coding agents
+              </span>
+            </div>
+          </Link>
+
+          <div className="shell-top__right">
+            {running > 0 && (
+              <span className="live mono">
+                <span className="live__dot" />
+                {running} live
+              </span>
+            )}
+            <button
+              type="button"
+              className="al-btn al-btn--ghost"
+              onClick={() => setTick(Date.now())}
+            >
+              Refresh
+            </button>
+          </div>
         </div>
       </header>
 
-      <div className="sessions-page__body">
-        {/* Import panel — always shown so users can backfill historical sessions */}
-        <ImportPanel onImported={() => setLastRefresh(Date.now())} />
+      <main className="sessions__main">
+        <motion.div
+          className="sessions__hero"
+          variants={fadeUp}
+          initial="hidden"
+          animate="show"
+        >
+          <h1 className="sessions__heading">Sessions</h1>
+          <p className="sessions__sub">
+            {sessions.length} captured
+            {cursorN > 0 && ` · ${cursorN} Cursor`}
+            {claudeN > 0 && ` · ${claudeN} Claude`}
+          </p>
+        </motion.div>
 
-        {/* Summary strip */}
+        <ImportBar onImported={() => setTick(Date.now())} />
+
         {sessions.length > 0 && (
-          <div className="summary-strip">
-            <div className="summary-strip__item">
-              <span className="summary-strip__value">{sessions.length}</span>
-              <span className="summary-strip__label">total sessions</span>
+          <motion.div
+            className="toolbar"
+            variants={fadeUp}
+            initial="hidden"
+            animate="show"
+            transition={{ delay: 0.04 }}
+          >
+            <div
+              className="agent-tabs"
+              role="tablist"
+              aria-label="Filter by agent"
+            >
+              {(
+                [
+                  ["all", "All", sessions.length],
+                  ["cursor", "Cursor", cursorN],
+                  ["claude-code", "Claude", claudeN],
+                ] as const
+              ).map(([key, label, count]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={agent === key}
+                  className={`agent-tab ${agent === key ? "agent-tab--on" : ""} agent-tab--${key}`}
+                  onClick={() => setAgent(key)}
+                >
+                  {label}
+                  <span className="agent-tab__n mono">{count}</span>
+                </button>
+              ))}
             </div>
-            {sessions.filter((s) => s.status !== "running").length > 0 && (
-              <div className="summary-strip__item">
-                <span className="summary-strip__value">{successRate}%</span>
-                <span className="summary-strip__label">success rate</span>
-              </div>
-            )}
-            {runningCount > 0 && (
-              <div className="summary-strip__item">
-                <span className="summary-strip__value running-dot">{runningCount}</span>
-                <span className="summary-strip__label">running</span>
-              </div>
-            )}
-          </div>
+
+            <div className="al-field toolbar__search">
+              <span className="mono" aria-hidden>
+                /
+              </span>
+              <input
+                className="al-field__input"
+                type="search"
+                placeholder="Filter by task, path, id…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="al-field__clear"
+                  onClick={() => setSearch("")}
+                >
+                  clear
+                </button>
+              )}
+            </div>
+
+            <div
+              className="group-tabs"
+              role="tablist"
+              aria-label="Group sessions"
+            >
+              {(
+                [
+                  ["day", "By day"],
+                  ["project", "By project"],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={groupMode === key}
+                  className={`group-tab ${groupMode === key ? "group-tab--on" : ""}`}
+                  onClick={() => setGroupMode(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </motion.div>
         )}
 
-        {/* Search */}
-        {sessions.length > 0 && (
-          <div className="search-bar">
-            <span className="search-bar__icon">⌕</span>
-            <input
-              className="search-bar__input"
-              type="text"
-              placeholder="Search sessions by task or agent…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            {search && (
-              <button className="search-bar__clear" onClick={() => setSearch("")}>
-                ×
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Content */}
         {loading ? (
-          <div className="loading-state">
-            <div className="spinner" />
-            <span>Loading sessions…</span>
-          </div>
+          <div className="state mono">Loading sessions…</div>
         ) : error ? (
-          <div className="error-state">
-            <div className="error-state__icon">⚠</div>
-            <div className="error-state__title">Could not load sessions</div>
-            <div className="error-state__body">{error}</div>
-            <button className="btn btn--primary" onClick={() => setLastRefresh(Date.now())}>
+          <div className="state state--bad">
+            <p>Could not reach the collector.</p>
+            <pre className="state__err mono">{error}</pre>
+            <button
+              type="button"
+              className="al-btn al-btn--primary"
+              onClick={() => setTick(Date.now())}
+            >
               Retry
             </button>
           </div>
         ) : filtered.length === 0 ? (
-          search ? (
-            <div className="empty-state">
-              <div className="empty-state__icon">⌕</div>
-              <div className="empty-state__title">No matching sessions</div>
-              <div className="empty-state__body">Try a different search term.</div>
+          search || agent !== "all" ? (
+            <div className="state">
+              <p>No sessions match this filter.</p>
+              <button
+                type="button"
+                className="al-btn"
+                onClick={() => {
+                  setSearch("");
+                  setAgent("all");
+                }}
+              >
+                Reset filters
+              </button>
             </div>
           ) : (
             <EmptyState />
           )
         ) : (
           <div className="session-groups">
-            {groups.map((group) => (
-              <div key={group.label} className="session-group">
-                <div className="session-group__label">{group.label}</div>
-                <div className="session-list">
-                  {group.sessions.map((s) => (
-                    <SessionCard key={s.id} session={s} onDelete={handleDelete} />
+            {groups.map((g) => (
+              <section key={g.label} className="day-group">
+                <h2 className="day-group__label mono">{g.label}</h2>
+                <motion.div
+                  className="session-list"
+                  variants={listVariants}
+                  initial="hidden"
+                  animate="show"
+                >
+                  {g.sessions.map((s) => (
+                    <SessionRow
+                      key={s.id}
+                      session={s}
+                      onDelete={handleDelete}
+                      density={densityLevel(s.eventCount, maxEvents)}
+                      hideCwd={groupMode === "project"}
+                    />
                   ))}
-                </div>
-              </div>
+                </motion.div>
+              </section>
             ))}
           </div>
         )}
-      </div>
-    </div>
+      </main>
+
+      <ShellFooter />
+    </motion.div>
   );
 }

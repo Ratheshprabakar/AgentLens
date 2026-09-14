@@ -67,11 +67,15 @@ function toolToEventType(toolName: string): EventType {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Parse diff stats from Bash/shell output — rough heuristic. */
-function parseDiffStats(output?: string): { additions?: number; deletions?: number } {
+/** Parse diff stats from Bash/shell output - rough heuristic. */
+function parseDiffStats(output?: string): {
+  additions?: number;
+  deletions?: number;
+} {
   if (!output) return {};
   // e.g. "+14 lines, -3 lines" or "14 insertions(+), 3 deletions(-)"
-  const addMatch = output.match(/(\d+)\s+insertion/i) ?? output.match(/\+(\d+)/);
+  const addMatch =
+    output.match(/(\d+)\s+insertion/i) ?? output.match(/\+(\d+)/);
   const delMatch = output.match(/(\d+)\s+deletion/i) ?? output.match(/-(\d+)/);
   return {
     additions: addMatch ? parseInt(addMatch[1], 10) : undefined,
@@ -80,7 +84,9 @@ function parseDiffStats(output?: string): { additions?: number; deletions?: numb
 }
 
 /** Extract exit code from tool_response result string. */
-function extractExitCode(response: ClaudePostToolUseInput["tool_response"]): number | undefined {
+function extractExitCode(
+  response: ClaudePostToolUseInput["tool_response"],
+): number | undefined {
   if (response.type === "tool_result" || response.type === "result") {
     const result = response.result ?? "";
     // Claude Code often puts exit code in the result as "Exit code: N"
@@ -91,17 +97,22 @@ function extractExitCode(response: ClaudePostToolUseInput["tool_response"]): num
 }
 
 /** Build output snippet (truncated to 2000 chars for storage). */
-function buildOutput(response: ClaudePostToolUseInput["tool_response"]): string | undefined {
+function buildOutput(
+  response: ClaudePostToolUseInput["tool_response"],
+): string | undefined {
   const raw = response.result ?? response.error ?? response.system;
   if (!raw) return undefined;
   return raw.length > 2000 ? raw.slice(0, 2000) + "\n…[truncated]" : raw;
 }
 
 /** Detect test results in shell output. */
-function detectTestResult(command: string, output: string): { isTest: boolean; success: boolean } {
+function detectTestResult(
+  command: string,
+  output: string,
+): { isTest: boolean; success: boolean } {
   const isTest =
     /\b(jest|vitest|pytest|go test|npm test|yarn test|pnpm test|mocha|jasmine|rspec|cargo test|dotnet test)\b/i.test(
-      command
+      command,
     );
   if (!isTest) return { isTest: false, success: true };
 
@@ -114,11 +125,14 @@ function detectTestResult(command: string, output: string): { isTest: boolean; s
 
 // ─── PostToolUse normalizer ───────────────────────────────────────────────────
 
-export function normalizePostToolUse(input: ClaudePostToolUseInput): AgentEvent {
+export function normalizePostToolUse(
+  input: ClaudePostToolUseInput,
+): AgentEvent {
   const type = toolToEventType(input.tool_name);
   const now = Date.now();
   const output = buildOutput(input.tool_response);
-  const success = input.tool_response.type !== "error" && !input.tool_response.error;
+  const success =
+    input.tool_response.type !== "error" && !input.tool_response.error;
 
   const base: AgentEvent = {
     id: randomUUID(),
@@ -136,8 +150,12 @@ export function normalizePostToolUse(input: ClaudePostToolUseInput): AgentEvent 
 
   switch (type) {
     case "file_read": {
-      const path = (input.tool_input.path ?? input.tool_input.file_path) as string | undefined;
-      const pattern = (input.tool_input.pattern ?? input.tool_input.glob) as string | undefined;
+      const path = (input.tool_input.path ?? input.tool_input.file_path) as
+        | string
+        | undefined;
+      const pattern = (input.tool_input.pattern ?? input.tool_input.glob) as
+        | string
+        | undefined;
       return {
         ...base,
         file: path,
@@ -147,8 +165,12 @@ export function normalizePostToolUse(input: ClaudePostToolUseInput): AgentEvent 
     }
 
     case "file_edit": {
-      const path = (input.tool_input.path ?? input.tool_input.file_path) as string | undefined;
-      const newStr = (input.tool_input.new_string ?? input.tool_input.content ?? "") as string;
+      const path = (input.tool_input.path ?? input.tool_input.file_path) as
+        | string
+        | undefined;
+      const newStr = (input.tool_input.new_string ??
+        input.tool_input.content ??
+        "") as string;
       const oldStr = (input.tool_input.old_string ?? "") as string;
       const additions = newStr.split("\n").length;
       const deletions = oldStr.split("\n").length - 1;
@@ -161,13 +183,16 @@ export function normalizePostToolUse(input: ClaudePostToolUseInput): AgentEvent 
     }
 
     case "shell": {
-      const command = (input.tool_input.command ?? input.tool_input.cmd ?? "") as string;
+      const command = (input.tool_input.command ??
+        input.tool_input.cmd ??
+        "") as string;
       const exitCode = extractExitCode(input.tool_response);
       const testResult = output ? detectTestResult(command, output) : null;
 
       // Upgrade to test_run type if it looks like a test command
       const finalType: EventType = testResult?.isTest ? "test_run" : "shell";
-      const finalSuccess = exitCode != null ? exitCode === 0 : (testResult?.success ?? success);
+      const finalSuccess =
+        exitCode != null ? exitCode === 0 : (testResult?.success ?? success);
 
       return {
         ...base,
@@ -180,11 +205,10 @@ export function normalizePostToolUse(input: ClaudePostToolUseInput): AgentEvent 
     }
 
     case "search": {
-      const query =
-        (input.tool_input.pattern ??
-          input.tool_input.query ??
-          input.tool_input.glob ??
-          input.tool_input.regex) as string | undefined;
+      const query = (input.tool_input.pattern ??
+        input.tool_input.query ??
+        input.tool_input.glob ??
+        input.tool_input.regex) as string | undefined;
 
       // Count result lines as rough proxy for result count
       const resultCount = output
@@ -200,7 +224,9 @@ export function normalizePostToolUse(input: ClaudePostToolUseInput): AgentEvent 
     }
 
     case "web": {
-      const url = (input.tool_input.url ?? input.tool_input.query) as string | undefined;
+      const url = (input.tool_input.url ?? input.tool_input.query) as
+        | string
+        | undefined;
       return {
         ...base,
         query: url?.slice(0, 500),
@@ -209,7 +235,8 @@ export function normalizePostToolUse(input: ClaudePostToolUseInput): AgentEvent 
     }
 
     case "subagent": {
-      const taskDesc = (input.tool_input.description ?? input.tool_input.prompt) as string | undefined;
+      const taskDesc = (input.tool_input.description ??
+        input.tool_input.prompt) as string | undefined;
       return {
         ...base,
         content: taskDesc?.slice(0, 500),
@@ -239,8 +266,10 @@ export function normalizePostToolUse(input: ClaudePostToolUseInput): AgentEvent 
  * We emit a synthetic session_start event on the very first PreToolUse
  * for a new session_id. The DB will ignore duplicate inserts.
  */
-export function normalizePreToolUse(input: ClaudePreToolUseInput): AgentEvent | null {
-  // Only emit session_start for first call — the DB upsertSession handles dedup
+export function normalizePreToolUse(
+  input: ClaudePreToolUseInput,
+): AgentEvent | null {
+  // Only emit session_start for first call - the DB upsertSession handles dedup
   return {
     id: randomUUID(),
     sessionId: input.session_id,
@@ -275,7 +304,9 @@ export function normalizeStop(input: ClaudeStopInput): AgentEvent {
 
 // ─── Notification normalizer ──────────────────────────────────────────────────
 
-export function normalizeNotification(input: ClaudeNotificationInput): AgentEvent {
+export function normalizeNotification(
+  input: ClaudeNotificationInput,
+): AgentEvent {
   return {
     id: randomUUID(),
     sessionId: input.session_id,
@@ -311,7 +342,7 @@ export function normalizeClaude(raw: unknown): AgentEvent[] {
       break;
     }
     default: {
-      // Unknown hook type — skip
+      // Unknown hook type - skip
       break;
     }
   }

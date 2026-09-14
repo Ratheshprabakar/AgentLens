@@ -36,7 +36,7 @@ interface ClaudeSettings {
 const CLAUDE_DIR = join(homedir(), ".claude");
 const SETTINGS_PATH = join(CLAUDE_DIR, "settings.json");
 
-/** The hook command — uses `agentlens-hook` binary if in PATH, else absolute path. */
+/** The hook command - uses `agentlens-hook` binary if in PATH, else absolute path. */
 function hookCommand(): string {
   // Try to resolve the absolute path to the hook script
   // When installed globally, `agentlens-hook` will be in PATH
@@ -70,7 +70,10 @@ const HOOK_COMMENT = "agentlens";
 
 function hasAgentLensHook(matchers: HookMatcher[] | undefined): boolean {
   return (matchers ?? []).some((m) =>
-    m.hooks.some((h) => h.command.includes(HOOK_COMMENT) || h.command.includes("agentlens"))
+    m.hooks.some(
+      (h) =>
+        h.command.includes(HOOK_COMMENT) || h.command.includes("agentlens"),
+    ),
   );
 }
 
@@ -81,7 +84,10 @@ function makeHookMatcher(cmd: string): HookMatcher {
   };
 }
 
-export function installHooks(): { alreadyInstalled: boolean; settingsPath: string } {
+export function installHooks(): {
+  alreadyInstalled: boolean;
+  settingsPath: string;
+} {
   const cmd = hookCommand();
   const settings = readSettings();
 
@@ -95,25 +101,25 @@ export function installHooks(): { alreadyInstalled: boolean; settingsPath: strin
     return { alreadyInstalled: true, settingsPath: SETTINGS_PATH };
   }
 
-  // PostToolUse — captures every tool invocation
+  // PostToolUse - captures every tool invocation
   if (!hasAgentLensHook(settings.hooks.PostToolUse)) {
     settings.hooks.PostToolUse ??= [];
     settings.hooks.PostToolUse.push(makeHookMatcher(cmd));
   }
 
-  // PreToolUse — used for session start detection
+  // PreToolUse - used for session start detection
   if (!hasAgentLensHook(settings.hooks.PreToolUse)) {
     settings.hooks.PreToolUse ??= [];
     settings.hooks.PreToolUse.push(makeHookMatcher(cmd));
   }
 
-  // Stop — marks session end
+  // Stop - marks session end
   if (!hasAgentLensHook(settings.hooks.Stop)) {
     settings.hooks.Stop ??= [];
     settings.hooks.Stop.push(makeHookMatcher(cmd));
   }
 
-  // Notification — captures agent notifications
+  // Notification - captures agent notifications
   if (!hasAgentLensHook(settings.hooks.Notification)) {
     settings.hooks.Notification ??= [];
     settings.hooks.Notification.push(makeHookMatcher(cmd));
@@ -131,9 +137,7 @@ export function uninstallHooks(): { settingsPath: string } {
     (matchers ?? [])
       .map((m) => ({
         ...m,
-        hooks: m.hooks.filter(
-          (h) => !h.command.includes("agentlens")
-        ),
+        hooks: m.hooks.filter((h) => !h.command.includes("agentlens")),
       }))
       .filter((m) => m.hooks.length > 0);
 

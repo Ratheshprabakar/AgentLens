@@ -1,40 +1,55 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
 import { getSession, type Session, type AgentEvent } from "../api.ts";
+import {
+  formatDuration,
+  formatOffset,
+  shortenPath,
+  agentLabel,
+} from "../lib/format.ts";
+import {
+  pageVariants,
+  pageTransition,
+  fadeUp,
+  timelineItemVariants,
+  expandVariants,
+} from "../lib/motion.ts";
+import ShellFooter from "../components/ShellFooter.tsx";
 import "./Session.css";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+const FILTERS = [
+  "All",
+  "Prompt",
+  "Files",
+  "Shell",
+  "Search",
+  "Tests",
+  "Errors",
+] as const;
+type FilterKey = (typeof FILTERS)[number];
 
-const EVENT_FILTERS = ["All", "Files", "Shell", "Search", "Tests", "Errors"] as const;
-type FilterKey = typeof EVENT_FILTERS[number];
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function formatDuration(ms?: number): string {
-  if (!ms || ms < 0) return "—";
-  const totalSec = Math.floor(ms / 1000);
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  return min === 0 ? `${sec}s` : `${min}m ${sec.toString().padStart(2, "0")}s`;
-}
-
-function formatRelativeTime(baseMs: number, ts: number): string {
-  const diffMs = ts - baseMs;
-  const diffSec = Math.floor(diffMs / 1000);
-  const min = Math.floor(diffSec / 60);
-  const sec = diffSec % 60;
-  return `${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
-}
+/** Initial visible events - keeps long Cursor sessions scannable. */
+const PAGE_SIZE = 60;
 
 function matchesFilter(event: AgentEvent, filter: FilterKey): boolean {
   switch (filter) {
-    case "All":    return true;
-    case "Files":  return event.type === "file_read" || event.type === "file_edit";
-    case "Shell":  return event.type === "shell";
-    case "Search": return event.type === "search";
-    case "Tests":  return event.type === "test_run";
-    case "Errors": return event.type === "error" || event.success === false;
-    default:       return true;
+    case "All":
+      return true;
+    case "Prompt":
+      return event.type === "user_message";
+    case "Files":
+      return event.type === "file_read" || event.type === "file_edit";
+    case "Shell":
+      return event.type === "shell";
+    case "Search":
+      return event.type === "search";
+    case "Tests":
+      return event.type === "test_run";
+    case "Errors":
+      return event.type === "error" || event.success === false;
+    default:
+      return true;
   }
 }
 
@@ -50,315 +65,250 @@ function eventMatchesSearch(event: AgentEvent, q: string): boolean {
   );
 }
 
-// ─── Event type metadata ──────────────────────────────────────────────────────
-
-type EventMeta = {
-  icon: string;
-  label: string;
-  color: string;
-};
+type EventMeta = { label: string; color: string };
 
 function getEventMeta(event: AgentEvent): EventMeta {
   const t = event.type;
-
-  if (t === "file_read")        return { icon: "◈", label: "Read",    color: "var(--event-file-read)" };
-  if (t === "file_edit")        return { icon: "✎", label: "Edit",    color: "var(--event-file-edit)" };
-  if (t === "shell")            return { icon: "$", label: "Shell",   color: "var(--event-shell)" };
-  if (t === "test_run")         return { icon: "▷", label: "Test",    color: event.success === false ? "var(--error)" : "var(--success)" };
-  if (t === "search")           return { icon: "⌕", label: "Search",  color: "var(--event-search)" };
-  if (t === "web")              return { icon: "↗", label: "Web",     color: "var(--event-web)" };
-  if (t === "error")            return { icon: "⚠", label: "Error",   color: "var(--event-error)" };
-  if (t === "session_start")    return { icon: "●", label: "Start",   color: "var(--event-session)" };
-  if (t === "session_end")      return { icon: "◼", label: "End",     color: "var(--event-session)" };
-  if (t === "subagent")         return { icon: "⊕", label: "Agent",   color: "var(--event-subagent)" };
-  if (t === "context_compaction") return { icon: "⊖", label: "Compact", color: "var(--text-tertiary)" };
-  if (t === "agent_message")    return { icon: "◦", label: "Note",    color: "var(--event-agent)" };
-  if (t === "user_message")     return { icon: "◉", label: "Prompt",  color: "var(--accent)" };
-  return                               { icon: "·", label: event.tool ?? "Event", color: "var(--text-tertiary)" };
+  if (t === "file_read") return { label: "read", color: "var(--ev-read)" };
+  if (t === "file_edit") return { label: "edit", color: "var(--ev-edit)" };
+  if (t === "shell") return { label: "shell", color: "var(--ev-shell)" };
+  if (t === "test_run")
+    return {
+      label: "test",
+      color: event.success === false ? "var(--ev-error)" : "var(--ev-test)",
+    };
+  if (t === "search") return { label: "search", color: "var(--ev-search)" };
+  if (t === "web") return { label: "web", color: "var(--ev-web)" };
+  if (t === "error") return { label: "error", color: "var(--ev-error)" };
+  if (t === "session_start")
+    return { label: "start", color: "var(--paper-faint)" };
+  if (t === "session_end") return { label: "end", color: "var(--paper-faint)" };
+  if (t === "subagent") return { label: "agent", color: "var(--ev-sub)" };
+  if (t === "context_compaction")
+    return { label: "compact", color: "var(--paper-faint)" };
+  if (t === "agent_message") return { label: "note", color: "var(--ev-note)" };
+  if (t === "user_message")
+    return { label: "prompt", color: "var(--ev-prompt)" };
+  return {
+    label: (event.tool ?? "event").toLowerCase(),
+    color: "var(--paper-faint)",
+  };
 }
 
-// ─── Event primary description ────────────────────────────────────────────────
-
-function EventPrimary({ event }: { event: AgentEvent }): JSX.Element {
+function EventPrimary({ event }: { event: AgentEvent }) {
   if (event.file) {
     return (
-      <span className="event-primary">
-        <span className="event-primary__path">{event.file}</span>
+      <span className="ev-primary">
+        <span className="ev-primary__path mono">{event.file}</span>
         {(event.additions != null || event.deletions != null) && (
-          <span className="event-diff-stats">
+          <span className="ev-diff mono">
             {event.additions != null && (
-              <span className="event-diff-stats__add">+{event.additions}</span>
+              <span className="ev-diff__a">+{event.additions}</span>
             )}
             {event.deletions != null && (
-              <span className="event-diff-stats__del">−{event.deletions}</span>
+              <span className="ev-diff__d">−{event.deletions}</span>
             )}
           </span>
         )}
       </span>
     );
   }
-
   if (event.command) {
     return (
-      <span className="event-primary">
-        <span className="event-primary__command">{event.command}</span>
+      <span className="ev-primary">
+        <span className="ev-primary__cmd mono">{event.command}</span>
         {event.exitCode != null && (
-          <span className={`event-exit-code ${event.exitCode === 0 ? "event-exit-code--ok" : "event-exit-code--err"}`}>
-            exit {event.exitCode}
+          <span
+            className={`ev-exit mono ${event.exitCode === 0 ? "ev-exit--ok" : "ev-exit--bad"}`}
+          >
+            {event.exitCode}
           </span>
         )}
       </span>
     );
   }
-
   if (event.query) {
     return (
-      <span className="event-primary">
-        <span className="event-primary__query">"{event.query}"</span>
+      <span className="ev-primary">
+        <span className="ev-primary__q">“{event.query}”</span>
         {event.resultCount != null && (
-          <span className="event-result-count">{event.resultCount} results</span>
+          <span className="ev-meta mono">{event.resultCount}</span>
         )}
       </span>
     );
   }
-
   if (event.content) {
     return (
-      <span className="event-primary">
-        <span className="event-primary__content">{event.content}</span>
+      <span className="ev-primary">
+        <span className="ev-primary__text">{event.content}</span>
       </span>
     );
   }
-
-  return <span className="event-primary event-primary--none">—</span>;
+  return <span className="ev-primary ev-primary--empty">-</span>;
 }
 
-// ─── Event detail panel ───────────────────────────────────────────────────────
-
-function EventDetail({ event }: { event: AgentEvent }): JSX.Element {
-  if (!event.output && !event.content && !event.metadata) {
-    return <div className="event-detail event-detail--empty">No additional details.</div>;
+function EventDetail({ event }: { event: AgentEvent }) {
+  // Content already appears in the row for prompts/notes - don't duplicate it.
+  const contentInRow = isContentPrimary(event);
+  const showContent =
+    !!event.content &&
+    !contentInRow &&
+    event.type !== "session_start" &&
+    event.type !== "session_end";
+  const meta = usefulMetadata(event.metadata);
+  if (!event.output && !showContent && !meta) {
+    return null;
   }
-
   return (
-    <div className="event-detail">
+    <motion.div
+      className="ev-detail"
+      variants={expandVariants}
+      initial="collapsed"
+      animate="open"
+      exit="collapsed"
+    >
       {event.output && (
-        <div className="event-detail__section">
-          <div className="event-detail__label">Output</div>
-          <pre className="event-detail__pre">{event.output}</pre>
+        <div className="ev-detail__block">
+          <div className="ev-detail__label mono">stdout</div>
+          <pre className="ev-detail__pre">{event.output}</pre>
         </div>
       )}
-      {event.content && event.type !== "session_start" && event.type !== "session_end" && (
-        <div className="event-detail__section">
-          <div className="event-detail__label">Content</div>
-          <pre className="event-detail__pre">{event.content}</pre>
+      {showContent && (
+        <div className="ev-detail__block">
+          <div className="ev-detail__label mono">content</div>
+          <pre className="ev-detail__pre">{event.content}</pre>
         </div>
       )}
-      {event.metadata && Object.keys(event.metadata).length > 0 && (
-        <div className="event-detail__section">
-          <div className="event-detail__label">Metadata</div>
-          <pre className="event-detail__pre">
-            {JSON.stringify(event.metadata, null, 2)}
-          </pre>
+      {meta && (
+        <div className="ev-detail__block">
+          <div className="ev-detail__label mono">meta</div>
+          <pre className="ev-detail__pre">{JSON.stringify(meta, null, 2)}</pre>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }
 
-// ─── Timeline event row ───────────────────────────────────────────────────────
+/** True when the row's primary line is already the event content (prompt / note). */
+function isContentPrimary(event: AgentEvent): boolean {
+  return !event.file && !event.command && !event.query && !!event.content;
+}
+
+/** Drop import bookkeeping that isn't useful in the timeline UI. */
+function usefulMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | null {
+  if (!metadata) return null;
+  const cleaned = { ...metadata };
+  delete cleaned.source;
+  return Object.keys(cleaned).length > 0 ? cleaned : null;
+}
+
+function eventHasExpandableDetail(event: AgentEvent): boolean {
+  if (event.output) return true;
+  if (usefulMetadata(event.metadata)) return true;
+  // Long prompt/note: expand only unclamps the row text (no duplicate panel)
+  if (isContentPrimary(event) && (event.content?.length ?? 0) > 140)
+    return true;
+  if (
+    event.content &&
+    !isContentPrimary(event) &&
+    event.type !== "session_start" &&
+    event.type !== "session_end"
+  ) {
+    return true;
+  }
+  return false;
+}
 
 function EventRow({
   event,
   baseTime,
-  isExpanded,
+  expanded,
   onToggle,
 }: {
   event: AgentEvent;
   baseTime: number;
-  isExpanded: boolean;
+  expanded: boolean;
   onToggle: () => void;
-}): JSX.Element {
+}) {
   const meta = getEventMeta(event);
-  const hasDetail = !!(event.output || (event.content && event.type !== "session_start" && event.type !== "session_end") || event.metadata);
-  const isFailure = event.success === false || event.type === "error";
+  const hasDetail = eventHasExpandableDetail(event);
+  const failed = event.success === false || event.type === "error";
 
   return (
-    <div
+    <motion.div
       className={[
-        "event-row",
-        isExpanded ? "event-row--expanded" : "",
-        isFailure ? "event-row--failure" : "",
-        hasDetail ? "event-row--clickable" : "",
-      ].filter(Boolean).join(" ")}
+        "ev",
+        expanded ? "ev--open" : "",
+        failed ? "ev--bad" : "",
+        hasDetail ? "ev--clickable" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      variants={timelineItemVariants}
+      initial="hidden"
+      animate="show"
+      layout="position"
       onClick={hasDetail ? onToggle : undefined}
+      onKeyDown={
+        hasDetail
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onToggle();
+              }
+            }
+          : undefined
+      }
       role={hasDetail ? "button" : undefined}
-      aria-expanded={hasDetail ? isExpanded : undefined}
+      tabIndex={hasDetail ? 0 : undefined}
+      aria-expanded={hasDetail ? expanded : undefined}
     >
-      {/* Timeline connector */}
-      <div className="event-row__track">
-        <div className="event-row__connector" />
-        <div
-          className="event-row__icon"
-          style={{ color: meta.color }}
-          title={meta.label}
-        >
-          {meta.icon}
-        </div>
+      <div className="ev__gutter mono">
+        {formatOffset(baseTime, event.timestamp)}
       </div>
-
-      {/* Content */}
-      <div className="event-row__content">
-        <div className="event-row__header">
-          <span className="event-row__time">{formatRelativeTime(baseTime, event.timestamp)}</span>
-          <span className="event-row__type" style={{ color: meta.color }}>
+      <div className="ev__track">
+        <span
+          className="ev__node"
+          style={{ borderColor: meta.color, background: meta.color }}
+        />
+      </div>
+      <div className="ev__body">
+        <div className="ev__line">
+          <span className="ev__type mono" style={{ color: meta.color }}>
             {meta.label}
           </span>
-          <span className="event-row__primary">
+          <span className="ev__primary">
             <EventPrimary event={event} />
           </span>
           {event.duration != null && (
-            <span className="event-row__duration">{formatDuration(event.duration)}</span>
-          )}
-          {hasDetail && (
-            <span className="event-row__expand-hint">{isExpanded ? "▲" : "▼"}</span>
+            <span className="ev__dur mono">
+              {formatDuration(event.duration)}
+            </span>
           )}
         </div>
-
-        {isExpanded && hasDetail && <EventDetail event={event} />}
+        <AnimatePresence initial={false}>
+          {expanded && hasDetail && <EventDetail key="detail" event={event} />}
+        </AnimatePresence>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
-// ─── Session header ───────────────────────────────────────────────────────────
-
-function SessionHeader({ session }: { session: Session }): JSX.Element {
-  const duration =
-    session.duration ??
-    (session.endTime
-      ? session.endTime - session.startTime
-      : Date.now() - session.startTime);
-
-  const statusClass = {
-    running: "session-header__status--running",
-    success: "session-header__status--success",
-    failed: "session-header__status--error",
-    unknown: "session-header__status--neutral",
-  }[session.status];
-
-  const statusLabel = {
-    running: "Running",
-    success: "Success",
-    failed: "Failed",
-    unknown: "Unknown",
-  }[session.status];
-
-  return (
-    <div className="session-header">
-      <div className="session-header__top">
-        <h1 className="session-header__task">
-          {session.task ?? "Unnamed session"}
-        </h1>
-        <span className={`session-header__status ${statusClass}`}>{statusLabel}</span>
-      </div>
-
-      <div className="session-header__meta">
-        <span>{session.agent}</span>
-        {session.model && <><span className="meta-sep">·</span><span>{session.model}</span></>}
-        <span className="meta-sep">·</span>
-        <span>{formatDuration(duration)}</span>
-        <span className="meta-sep">·</span>
-        <span>{new Date(session.startTime).toLocaleString()}</span>
-        {session.cwd && (
-          <><span className="meta-sep">·</span><code className="session-header__cwd">{session.cwd}</code></>
-        )}
-      </div>
-
-      <div className="session-header__stats">
-        <SessionStat label="events" value={session.eventCount} />
-        <SessionStat label="file reads" value={session.fileReads} />
-        <SessionStat label="file edits" value={session.fileEdits} />
-        <SessionStat label="shell" value={session.shellCommands} />
-        <SessionStat label="searches" value={session.searches} />
-        {session.errors > 0 && (
-          <SessionStat label="errors" value={session.errors} danger />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SessionStat({
-  label,
-  value,
-  danger,
-}: {
-  label: string;
-  value: number;
-  danger?: boolean;
-}): JSX.Element {
-  return (
-    <div className={`session-stat-block ${danger ? "session-stat-block--danger" : ""}`}>
-      <span className="session-stat-block__value">{value}</span>
-      <span className="session-stat-block__label">{label}</span>
-    </div>
-  );
-}
-
-// ─── Timeline ─────────────────────────────────────────────────────────────────
-
-function Timeline({
-  events,
-  baseTime,
-}: {
-  events: AgentEvent[];
-  baseTime: number;
-}): JSX.Element {
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-
-  const toggle = useCallback((id: string) => {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
-
-  if (events.length === 0) {
-    return (
-      <div className="timeline-empty">No events match the current filter.</div>
-    );
-  }
-
-  return (
-    <div className="timeline">
-      {events.map((event) => (
-        <EventRow
-          key={event.id}
-          event={event}
-          baseTime={baseTime}
-          isExpanded={expandedIds.has(event.id)}
-          onToggle={() => toggle(event.id)}
-        />
-      ))}
-    </div>
-  );
-}
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
-
-export default function SessionPage(): JSX.Element {
+export default function SessionPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-
   const [session, setSession] = useState<Session | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>("All");
   const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  /** Notes (agent_message) off by default - opt in via “Show notes”. */
+  const [showNotes, setShowNotes] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -378,7 +328,11 @@ export default function SessionPage(): JSX.Element {
     void load();
   }, [load]);
 
-  // Auto-refresh while running
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+    setExpanded(new Set());
+  }, [id, filter, search, showNotes]);
+
   useEffect(() => {
     if (session?.status !== "running") return;
     const timer = setInterval(() => void load(), 3000);
@@ -387,107 +341,301 @@ export default function SessionPage(): JSX.Element {
 
   const baseTime = events[0]?.timestamp ?? Date.now();
 
-  const filteredEvents = useMemo(() => {
-    let result = events.filter((e) => matchesFilter(e, filter));
-    if (search) result = result.filter((e) => eventMatchesSearch(e, search));
-    return result;
-  }, [events, filter, search]);
+  const filtered = useMemo(() => {
+    let list = events.filter((e) => matchesFilter(e, filter));
+    if (!showNotes) list = list.filter((e) => e.type !== "agent_message");
+    if (search) list = list.filter((e) => eventMatchesSearch(e, search));
+    return list;
+  }, [events, filter, search, showNotes]);
+
+  const visible = useMemo(
+    () => filtered.slice(0, visibleCount),
+    [filtered, visibleCount],
+  );
+  const remaining = Math.max(0, filtered.length - visible.length);
+  const noteCount = useMemo(
+    () => events.filter((e) => e.type === "agent_message").length,
+    [events],
+  );
+
+  const loadMore = (count = PAGE_SIZE) => {
+    setVisibleCount((n) => Math.min(filtered.length, n + count));
+  };
+
+  const toggle = (eid: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(eid)) next.delete(eid);
+      else next.add(eid);
+      return next;
+    });
+  };
 
   if (loading) {
     return (
-      <div className="session-page session-page--loading">
-        <div className="spinner" />
-        <span>Loading session…</span>
+      <div className="session session--center">
+        <p className="mono">Loading timeline…</p>
       </div>
     );
   }
 
   if (error || !session) {
     return (
-      <div className="session-page session-page--error">
-        <div className="error-state">
-          <div className="error-state__icon">⚠</div>
-          <div className="error-state__title">Session not found</div>
-          <div className="error-state__body">{error ?? "The session may have been deleted."}</div>
-          <button className="btn btn--ghost" onClick={() => navigate("/")}>
-            ← Back to sessions
-          </button>
-        </div>
+      <div className="session session--center">
+        <p>Session not found</p>
+        <pre className="mono session__err">{error}</pre>
+        <button type="button" className="al-btn" onClick={() => navigate("/")}>
+          Back to sessions
+        </button>
       </div>
     );
   }
 
+  const duration =
+    session.duration ??
+    (session.endTime
+      ? session.endTime - session.startTime
+      : Date.now() - session.startTime);
+
+  const agentClass =
+    session.agent === "cursor"
+      ? "agent-chip--cursor"
+      : session.agent === "claude-code"
+        ? "agent-chip--claude"
+        : "";
+
   return (
-    <div className="session-page">
-      {/* Top nav */}
-      <header className="session-nav">
-        <Link to="/" className="session-nav__back">
-          ← Sessions
-        </Link>
-        <div className="session-nav__brand">
-          <span className="session-nav__logo">◉</span>
-          <span className="session-nav__title">AgentLens</span>
+    <motion.div
+      className="session"
+      variants={pageVariants}
+      initial="initial"
+      animate="animate"
+      exit="exit"
+      transition={pageTransition}
+    >
+      <header className="shell-top">
+        <div className="shell-top__inner">
+          <Link to="/" className="brand" aria-label="AgentLens home">
+            <span className="brand__mark" aria-hidden />
+            <div className="brand__text">
+              <span className="brand__name">AgentLens</span>
+              <span className="brand__tag mono">
+                devtools for coding agents
+              </span>
+            </div>
+          </Link>
+
+          <div className="shell-top__right">
+            {session.status === "running" && (
+              <span className="live mono">
+                <span className="live__dot" />
+                live
+              </span>
+            )}
+            <button
+              type="button"
+              className="al-btn al-btn--ghost"
+              onClick={() => void load()}
+            >
+              Refresh
+            </button>
+          </div>
         </div>
-        <button
-          className="btn btn--ghost"
-          onClick={() => void load()}
-          title="Refresh"
-        >
-          ↻
-        </button>
       </header>
 
-      <div className="session-page__body">
-        {/* Session header */}
-        <SessionHeader session={session} />
-
-        <div className="timeline-controls">
-          {/* Filter tabs */}
-          <div className="filter-tabs">
-            {EVENT_FILTERS.map((f) => (
-              <button
-                key={f}
-                className={`filter-tab ${filter === f ? "filter-tab--active" : ""}`}
-                onClick={() => setFilter(f)}
-              >
-                {f}
-                {f !== "All" && (
-                  <span className="filter-tab__count">
-                    {events.filter((e) => matchesFilter(e, f)).length}
-                  </span>
-                )}
-              </button>
-            ))}
+      <div className="session__body">
+        <motion.header
+          className="session-hero"
+          variants={fadeUp}
+          initial="hidden"
+          animate="show"
+        >
+          <div className="session-hero__eyebrow">
+            <span className={`agent-chip mono ${agentClass}`}>
+              {agentLabel(session.agent)}
+            </span>
+            <span className="mono session-hero__id">
+              {session.id.slice(0, 8)}
+            </span>
           </div>
 
-          {/* Search */}
-          <div className="timeline-search">
-            <span className="timeline-search__icon">⌕</span>
-            <input
-              className="timeline-search__input"
-              type="text"
-              placeholder="Search timeline…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            {search && (
-              <button className="timeline-search__clear" onClick={() => setSearch("")}>
-                ×
-              </button>
+          <div className="session-hero__title-row">
+            <h1 className="session-hero__title">
+              {session.task ?? "Untitled session"}
+            </h1>
+            <Link to="/" className="session-hero__back mono">
+              ← Sessions
+            </Link>
+          </div>
+
+          <div className="session-hero__meta mono">
+            <span>{formatDuration(duration)}</span>
+            <span className="session-hero__sep">·</span>
+            <span>{new Date(session.startTime).toLocaleString()}</span>
+            {session.model && (
+              <>
+                <span className="session-hero__sep">·</span>
+                <span>{session.model}</span>
+              </>
+            )}
+            {session.cwd && (
+              <>
+                <span className="session-hero__sep">·</span>
+                <span className="truncate">{shortenPath(session.cwd)}</span>
+              </>
             )}
           </div>
-        </div>
 
-        {/* Match count */}
-        {(filter !== "All" || search) && (
-          <div className="timeline-count">
-            {filteredEvents.length} of {events.length} events
+          <div className="session-stats">
+            <Stat label="events" value={session.eventCount} />
+            <Stat label="reads" value={session.fileReads} />
+            <Stat label="edits" value={session.fileEdits} />
+            <Stat label="shell" value={session.shellCommands} />
+            <Stat label="search" value={session.searches} />
+            {session.errors > 0 && (
+              <Stat label="errors" value={session.errors} danger />
+            )}
           </div>
-        )}
+        </motion.header>
 
-        {/* Timeline */}
-        <Timeline events={filteredEvents} baseTime={baseTime} />
+        <motion.div
+          className="timeline-panel"
+          variants={fadeUp}
+          initial="hidden"
+          animate="show"
+          transition={{ delay: 0.05 }}
+        >
+          <div className="timeline-bar">
+            <div className="filter-row" role="tablist">
+              {FILTERS.map((f) => {
+                const count =
+                  f === "All"
+                    ? events.filter(
+                        (e) => showNotes || e.type !== "agent_message",
+                      ).length
+                    : events.filter(
+                        (e) =>
+                          matchesFilter(e, f) &&
+                          (showNotes || e.type !== "agent_message"),
+                      ).length;
+                return (
+                  <button
+                    key={f}
+                    type="button"
+                    role="tab"
+                    aria-selected={filter === f}
+                    className={`filter-link ${filter === f ? "filter-link--on" : ""}`}
+                    onClick={() => setFilter(f)}
+                  >
+                    {f}
+                    <span className="mono filter-link__n">{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="timeline-bar__tools">
+              {filter === "All" && noteCount > 0 && (
+                <label className="notes-toggle mono">
+                  <input
+                    type="checkbox"
+                    checked={showNotes}
+                    onChange={(e) => setShowNotes(e.target.checked)}
+                  />
+                  Show notes
+                </label>
+              )}
+              <div className="al-field timeline-bar__search">
+                <span className="mono" aria-hidden>
+                  /
+                </span>
+                <input
+                  className="al-field__input"
+                  type="search"
+                  placeholder="Search file, command, output…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                {search && (
+                  <button
+                    type="button"
+                    className="al-field__clear"
+                    onClick={() => setSearch("")}
+                  >
+                    clear
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="timeline-status mono">
+            <span>
+              {visible.length}
+              {remaining > 0 ? ` of ${filtered.length}` : ""} events
+              {filtered.length !== events.length && ` · ${events.length} total`}
+            </span>
+          </div>
+
+          <div className="timeline-scroll">
+            <div className="timeline">
+              {filtered.length === 0 ? (
+                <p className="timeline-empty">No events match.</p>
+              ) : (
+                visible.map((event) => (
+                  <EventRow
+                    key={event.id}
+                    event={event}
+                    baseTime={baseTime}
+                    expanded={expanded.has(event.id)}
+                    onToggle={() => toggle(event.id)}
+                  />
+                ))
+              )}
+            </div>
+
+            {remaining > 0 && (
+              <div className="timeline-more">
+                <button
+                  type="button"
+                  className="al-btn al-btn--primary"
+                  onClick={() => loadMore()}
+                >
+                  Load more · {Math.min(PAGE_SIZE, remaining)} of {remaining}
+                </button>
+                {remaining > PAGE_SIZE && (
+                  <button
+                    type="button"
+                    className="al-btn"
+                    onClick={() => setVisibleCount(filtered.length)}
+                  >
+                    Show all {filtered.length}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </motion.div>
       </div>
+
+      <ShellFooter />
+    </motion.div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  danger,
+}: {
+  label: string;
+  value: number;
+  danger?: boolean;
+}) {
+  return (
+    <div className={`sstat ${danger ? "sstat--bad" : ""}`}>
+      <span className="sstat__n mono">{value}</span>
+      <span className="sstat__l">{label}</span>
     </div>
   );
 }

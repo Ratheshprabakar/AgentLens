@@ -1,0 +1,54 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AgentLens - Production compose (end-user install)
+#
+# Uses the pre-built image from Docker Hub. No source code required.
+#
+# Quick start:
+#   curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/scripts/install.sh | bash
+#
+# Manual start:
+#   curl -O https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/docker-compose.prod.yml
+#   CLAUDE_PROJECTS_DIR=~/.claude/projects docker compose -f docker-compose.prod.yml up -d
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentlens-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: agentlens
+      POSTGRES_USER: agentlens
+      POSTGRES_PASSWORD: agentlens
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentlens -d agentlens"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ── AgentLens App (pre-built from Docker Hub) ───────────────────────────────
+  app:
+    image: ratheshprabakar/agentlens:latest # ← pulled from Docker Hub, no build step
+    container_name: agentlens-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://agentlens:agentlens@postgres:5432/agentlens
+      PORT: ${PORT:-4040}
+      CLAUDE_PROJECTS_DIR: /claude-projects
+      CURSOR_PROJECTS_DIR: /cursor-projects
+    volumes:
+      - ${CLAUDE_PROJECTS_DIR:-~/.claude/projects}:/claude-projects:ro
+      - ${CURSOR_PROJECTS_DIR:-~/.cursor/projects}:/cursor-projects:ro
+    ports:
+      - "${PORT:-4040}:4040"
+
+volumes:
+  pgdata:
+    name: agentlens-pgdata

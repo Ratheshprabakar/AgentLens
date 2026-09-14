@@ -30,13 +30,14 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL:        postgresql://agentlens:agentlens@postgres:5432/agentlens
-      NODE_ENV:            production
       PORT:                4040
       CLAUDE_PROJECTS_DIR: /claude-projects
+      CURSOR_PROJECTS_DIR: /cursor-projects
     volumes:
       # Mount Claude Code transcript directory (read-only)
-      # Docker Desktop: add ~/.claude to File Sharing in Preferences → Resources → File Sharing
       - ${CLAUDE_PROJECTS_DIR:-~/.claude/projects}:/claude-projects:ro
+      # Mount Cursor agent transcripts (read-only)
+      - ${CURSOR_PROJECTS_DIR:-~/.cursor/projects}:/cursor-projects:ro
     ports:
       - "${PORT:-4040}:4040"
 

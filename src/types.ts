@@ -18,10 +18,15 @@ export type EventType =
 
 export type SessionStatus = "running" | "success" | "failed" | "unknown";
 
-export type AgentName = "claude-code" | "cursor" | "codex" | "gemini-cli" | string;
+export type AgentName =
+  | "claude-code"
+  | "cursor"
+  | "codex"
+  | "gemini-cli"
+  | string;
 
 /**
- * Normalized event — the single unit of observability across all agent adapters.
+ * Normalized event - the single unit of observability across all agent adapters.
  * Every adapter (Claude Code, Cursor, …) converts its native events into this schema.
  */
 export interface AgentEvent {
