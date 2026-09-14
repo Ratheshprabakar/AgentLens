@@ -1,0 +1,217 @@
+name: Release
+
+# Triggered when you push a version tag:  git tag v0.2.0 && git push --tags
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  # Change this to your Docker Hub org/repo once you've created it
+  DOCKER_IMAGE: ratheshprabakar/agentlens
+
+jobs:
+  # ── 1. Build & push multi-platform Docker image ────────────────────────────
+  docker:
+    name: Docker - build & push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # QEMU lets us build arm64 images on x64 runners
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract version tag
+        id: meta
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}
+            ${{ env.DOCKER_IMAGE }}:latest
+          # Cache layers between runs (speeds up builds significantly)
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── 2. Build self-contained CLI binaries ───────────────────────────────────
+  #
+  # Each binary bundles the Bun runtime - users need nothing installed.
+  # Primary use: agentlens install / uninstall / status (hook management).
+  # For the full server + UI, use Docker.
+  #
+  binaries:
+    name: Binary - ${{ matrix.artifact }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest # Apple Silicon
+            target: bun-darwin-arm64
+            artifact: agentlens-macos-arm64
+
+          - runner: macos-13 # Intel Mac
+            target: bun-darwin-x64
+            artifact: agentlens-macos-x64
+
+          - runner: ubuntu-latest # Linux x64 (most servers & WSL)
+            target: bun-linux-x64
+            artifact: agentlens-linux-x64
+
+          - runner: ubuntu-latest # Linux ARM (Raspberry Pi, AWS Graviton)
+            target: bun-linux-arm64
+            artifact: agentlens-linux-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Install only runtime deps (pg, express, etc.) - no devDeps needed
+      - run: pnpm install --prod --frozen-lockfile
+
+      # --compile bundles everything (including Bun runtime) into one binary
+      - name: Compile
+        run: |
+          bun build \
+            --compile \
+            --target=${{ matrix.target }} \
+            --minify \
+            src/cli.ts \
+            --outfile ${{ matrix.artifact }}
+
+      # Optionally compress with UPX (cuts ~40% off binary size)
+      # macOS binaries can't use UPX on GitHub Actions without extra setup
+      - name: Compress with UPX (Linux only)
+        if: startsWith(matrix.runner, 'ubuntu')
+        run: |
+          sudo apt-get install -y upx-ucl
+          upx --best ${{ matrix.artifact }} || true   # ignore if UPX can't handle it
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  # ── 3. Create GitHub Release with binary assets ────────────────────────────
+  release:
+    name: GitHub Release
+    needs: [docker, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets/
+
+      - name: Flatten artifact dirs
+        run: find release-assets/ -type f -exec mv {} release-assets/ \; 2>/dev/null || true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/agentlens-*
+          body: |
+            ## Install AgentLens ${{ github.ref_name }}
+
+            ### One-command install (Docker)
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | bash
+            ```
+
+            ### CLI binary (macOS / Linux)
+            ```bash
+            # macOS Apple Silicon
+            curl -Lo agentlens https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/agentlens-macos-arm64
+            chmod +x agentlens && sudo mv agentlens /usr/local/bin/
+
+            # macOS Intel
+            curl -Lo agentlens https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/agentlens-macos-x64
+            chmod +x agentlens && sudo mv agentlens /usr/local/bin/
+
+            # Linux x64
+            curl -Lo agentlens https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/agentlens-linux-x64
+            chmod +x agentlens && sudo mv agentlens /usr/local/bin/
+            ```
+
+            ### npm / npx
+            ```bash
+            npx agentlens@${{ github.ref_name }} install
+            # or
+            npm install -g agentlens@${{ github.ref_name }}
+            ```
+
+  # ── 4. Publish to npm registry ─────────────────────────────────────────────
+  npm:
+    name: npm publish
+    needs: [docker] # only publish if Docker succeeded
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: pnpm install --frozen-lockfile
+
+      # Build the web UI (static assets bundled into dist/web/)
+      - run: pnpm run build:web
+
+      # Bundle the CLI + server into a single Node-compatible JS file
+      # This is what registry users get - no Bun runtime required
+      - name: Bundle CLI for npm
+        run: |
+          bun build src/cli.ts \
+            --target=node \
+            --outfile dist/cli.js \
+            --banner="#!/usr/bin/env node"
+
+      - name: Publish
+        run: pnpm publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
