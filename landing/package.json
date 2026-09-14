@@ -11,6 +11,7 @@
     "sync:install": "node -e \"try{require('fs').copyFileSync('../scripts/install.sh','public/install.sh');console.log('synced public/install.sh')}catch(e){console.log('using committed public/install.sh')}\""
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "framer-motion": "^11.18.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
