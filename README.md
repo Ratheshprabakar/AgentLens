@@ -6,6 +6,8 @@ Local timeline for what your coding agent actually did - prompts, file reads, ed
 
 Supports **Claude Code** (live capture) and **Cursor** (import). More agents coming.
 
+![AgentLens — local DevTools for AI coding agents](docs/hero.png)
+
 Docker image: [ratheshprabakar/agentlens](https://hub.docker.com/r/ratheshprabakar/agentlens)
 
 ---
@@ -42,15 +44,6 @@ Then open **http://localhost:4050**.
 - Run your agent as usual - live sessions show up on the timeline.
 - You do **not** need to re-run the curl install unless you are updating or recreated the container.
 
-### Optional: Docker Compose
-
-Use this if you prefer Postgres in a separate container:
-
-```bash
-curl -O https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/docker-compose.prod.yml
-docker compose -f docker-compose.prod.yml up -d
-```
-
 ---
 
 ## Stop / uninstall
@@ -67,13 +60,6 @@ docker volume rm agentlens-data
 
 # Remove Claude Code hooks only
 curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash -s -- --uninstall-hooks
-```
-
-Compose users:
-
-```bash
-docker compose -f docker-compose.prod.yml down      # keep DB volume
-docker compose -f docker-compose.prod.yml down -v   # delete DB volume
 ```
 
 ---
@@ -102,17 +88,3 @@ Your coding agent (e.g. Claude Code)
 | **Live hooks**         | Each tool call while the agent runs | Yes                      |
 | **Startup import**     | When the container starts           | Backfills history        |
 | **Transcript watcher** | Every few seconds while running     | Picks up growing files   |
-
----
-
-## Configuration
-
-Set these when starting the container (the install script sets sensible defaults).
-
-| Variable              | Default            | Description                                             |
-| --------------------- | ------------------ | ------------------------------------------------------- |
-| `PORT`                | `4040`             | Host port published by `install.sh` / mapped to the app |
-| `AGENTLENS_HOST_PORT` | same as host port  | Port written into Claude Code hooks                     |
-| `CLAUDE_PROJECTS_DIR` | `/claude-projects` | Claude transcripts inside the container                 |
-| `CURSOR_PROJECTS_DIR` | `/cursor-projects` | Cursor transcripts inside the container                 |
-| `DATABASE_URL`        | embedded Postgres  | Set this to use an external DB (Compose)                |
