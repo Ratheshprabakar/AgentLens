@@ -8,10 +8,10 @@
 #   3. Opens the dashboard in your browser
 #
 # Usage (repo is public - served from GitHub raw):
-#   curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/scripts/install.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash
 #
 # To uninstall hooks only:
-#   curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/scripts/install.sh | bash -s -- --uninstall-hooks
+#   curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash -s -- --uninstall-hooks
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -e
@@ -22,7 +22,7 @@ CONTAINER_NAME="${AGENTLENS_NAME:-agentlens}"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 COLLECTOR_URL="http://localhost:${AGENTLENS_PORT}/api/events"
 # Public install URL (GitHub raw while repo is public).
-INSTALL_URL="${AGENTLENS_INSTALL_URL:-https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/scripts/install.sh}"
+INSTALL_URL="${AGENTLENS_INSTALL_URL:-https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh}"
 
 BOLD='\033[1m'
 GREEN='\033[0;32m'

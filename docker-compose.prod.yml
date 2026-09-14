@@ -12,7 +12,7 @@
 # This compose file keeps Postgres in a separate container (DATABASE_URL set,
 # so the app image skips its embedded database).
 #
-#   curl -O https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/docker-compose.prod.yml
+#   curl -O https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/docker-compose.prod.yml
 #   docker compose -f docker-compose.prod.yml up -d
 # ─────────────────────────────────────────────────────────────────────────────
 

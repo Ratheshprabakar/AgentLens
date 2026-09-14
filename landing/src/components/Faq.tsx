@@ -22,7 +22,7 @@ const FAQS = [
   },
   {
     q: "What if something is already using the default port?",
-    a: "Run with a free port, for example: PORT=4050 curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/scripts/install.sh | bash - then open the dashboard on that port.",
+    a: "Run with a free port, for example: PORT=4050 curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash - then open the dashboard on that port.",
   },
   {
     q: "Which agents work today?",

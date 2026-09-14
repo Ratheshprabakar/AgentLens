@@ -15,7 +15,7 @@ Docker image: [ratheshprabakar/agentlens](https://hub.docker.com/r/ratheshprabak
 **Requirements:** [Docker Desktop](https://www.docker.com/get-started/) and `curl`.
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash
 ```
 
 That one command:
@@ -30,7 +30,7 @@ You do not type volume mounts.
 **If port 4040 is already in use:**
 
 ```bash
-PORT=4050 curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/scripts/install.sh | bash
+PORT=4050 curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash
 ```
 
 Then open **http://localhost:4050**.
@@ -47,7 +47,7 @@ Then open **http://localhost:4050**.
 Use this if you prefer Postgres in a separate container:
 
 ```bash
-curl -O https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/docker-compose.prod.yml
+curl -O https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/docker-compose.prod.yml
 docker compose -f docker-compose.prod.yml up -d
 ```
 
@@ -66,7 +66,7 @@ docker rm agentlens
 docker volume rm agentlens-data
 
 # Remove Claude Code hooks only
-curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/scripts/install.sh | bash -s -- --uninstall-hooks
+curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash -s -- --uninstall-hooks
 ```
 
 Compose users:
