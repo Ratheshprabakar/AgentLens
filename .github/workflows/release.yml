@@ -104,7 +104,7 @@ jobs:
             src/cli.ts \
             --outfile ${{ matrix.artifact }}
 
-      # UPX --best on linux-arm64 (esp. cross-built) can hang for hours — skip arm64
+      # UPX --best on linux-arm64 (esp. cross-built) can hang for hours - skip arm64
       - name: Compress with UPX (linux x64 only)
         if: matrix.target == 'bun-linux-x64'
         timeout-minutes: 5

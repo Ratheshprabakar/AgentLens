@@ -14,12 +14,12 @@
 </p>
 
 <p align="center">
-  <img src="docs/hero.png" alt="AgentLens dashboard — live session timeline" width="920" />
+  <img src="docs/hero.png" alt="AgentLens dashboard - live session timeline" width="920" />
 </p>
 
 ---
 
-AgentLens turns opaque agent sessions into a **local, scannable timeline** — every prompt, file read, edit, shell command, and search, in order — so you can see where time went and where the agent got stuck.
+AgentLens turns opaque agent sessions into a **local, scannable timeline** - every prompt, file read, edit, shell command, and search, in order - so you can see where time went and where the agent got stuck.
 
 Runs on your machine. No account. No cloud upload.
 
@@ -29,17 +29,17 @@ Long agent runs burn time and tokens, then leave you guessing. AgentLens gives y
 
 ## Features
 
-- **Live timeline** — Watch the next agent run as it happens
-- **Find the loop** — Spot thrash, dead ends, and the step that burned the time
-- **Import history** — Rebuild past sessions without replaying them
-- **Local by default** — Data stays on your box
+- **Live timeline** - Watch the next agent run as it happens
+- **Find the loop** - Spot thrash, dead ends, and the step that burned the time
+- **Import history** - Rebuild past sessions without replaying them
+- **Local by default** - Data stays on your box
 
 ## Supported agents
 
-| Agent | Mode |
-| ----- | ---- |
-| [Claude Code](https://claude.ai/code) | Live capture |
-| [Cursor](https://cursor.com) | Import sessions |
+| Agent                                 | Mode            |
+| ------------------------------------- | --------------- |
+| [Claude Code](https://claude.ai/code) | Live capture    |
+| [Cursor](https://cursor.com)          | Import sessions |
 
 More agents coming.
 
@@ -53,9 +53,9 @@ curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scr
 
 One command will:
 
-1. Pull the AgentLens image  
-2. Start the app (database included)  
-3. Wire up Claude Code live capture  
+1. Pull the AgentLens image
+2. Start the app (database included)
+3. Wire up Claude Code live capture
 4. Open the dashboard at **http://localhost:4040**
 
 Port `4040` already in use?
@@ -66,9 +66,9 @@ PORT=4050 curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/
 
 ## After install
 
-1. Keep the **agentlens** container running in Docker Desktop (or start it when you need it)  
-2. Open the dashboard in your browser  
-3. Use your coding agent as usual — sessions appear on the timeline  
+1. Keep the **agentlens** container running in Docker Desktop (or start it when you need it)
+2. Open the dashboard in your browser
+3. Use your coding agent as usual - sessions appear on the timeline
 
 You only re-run the install command to update, or if you removed the container.
 
@@ -82,11 +82,11 @@ Coding agent  ──hooks──▶  AgentLens (Docker)  ──▶  Local timelin
 
 Sessions are captured three ways:
 
-| Path | What it does |
-| ---- | ------------ |
-| **Live hooks** | Stream events while the agent runs |
-| **Startup import** | Backfill history when the container starts |
-| **Watcher** | Pick up growing transcript files while running |
+| Path               | What it does                                   |
+| ------------------ | ---------------------------------------------- |
+| **Live hooks**     | Stream events while the agent runs             |
+| **Startup import** | Backfill history when the container starts     |
+| **Watcher**        | Pick up growing transcript files while running |
 
 ## Stop / uninstall
 
