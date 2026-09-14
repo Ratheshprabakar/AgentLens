@@ -10,7 +10,7 @@ Your coding agent has a timeline. You just couldn’t see it.
 [Docker Hub](https://hub.docker.com/r/ratheshprabakar/agentlens) ·
 [Install](#quick-start)
 
-<img src="docs/hero.png" alt="AgentLens dashboard — live session timeline" width="920" />
+<img src="docs/hero.png" alt="AgentLens dashboard - live session timeline" width="920" />
 
 </div>
 

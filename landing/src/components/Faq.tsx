@@ -6,7 +6,7 @@ import "./Faq.css";
 const FAQS = [
   {
     q: "What is AgentLens?",
-    a: "Local DevTools for AI coding agents. It turns a session into a timeline of prompts, edits, shell commands, and searches - so you can see where time went and where the agent got stuck.",
+    a: "Local DevTools for AI coding agents. It turns a session into a timeline of prompts, edits, shell commands, and searches - so you can see where time went and where it got stuck.",
   },
   {
     q: "Does my data leave my machine?",
@@ -17,24 +17,28 @@ const FAQS = [
     a: "Docker Desktop and a terminal. Paste the one-line install command - it pulls the image, starts AgentLens, and opens the dashboard. Then run your agent as usual.",
   },
   {
-    q: "Why a curl install instead of docker run?",
-    a: "That’s the usual pattern for local developer tools (same idea as many CLI installers). The script hides the long Docker flags so you don’t have to type volume mounts. Under the hood it still runs the official image on your machine.",
+    q: "Do I run the install command every time?",
+    a: "No. Run it once. After that, start or stop the agentlens container in Docker Desktop and open the dashboard when you need it. Re-run install only to update, or if you removed the container.",
   },
   {
-    q: "What if something is already using the default port?",
-    a: "Run with a free port, for example: PORT=4050 curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash - then open the dashboard on that port.",
+    q: "Why a curl install instead of typing docker run?",
+    a: "That’s the usual pattern for local developer tools. The script hides the long Docker flags so you don’t have to type volume mounts. Under the hood it still runs the official image on your machine.",
+  },
+  {
+    q: "What if the default port is already in use?",
+    a: "Install with a free port, for example: PORT=4050 curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/master/scripts/install.sh | bash - then open the dashboard on that port.",
   },
   {
     q: "Which agents work today?",
-    a: "Claude Code (live capture) and Cursor (import past sessions). See Supported above - we’ll add more agents there as they land.",
+    a: "Claude Code (live capture) and Cursor (import past sessions). See Supported Agents above - we’ll add more there as they land.",
   },
   {
     q: "Can I look at sessions I already ran?",
-    a: "Yes. Point AgentLens at history you already have and rebuild the timeline - no need to re-run those sessions.",
+    a: "Yes. AgentLens can import history from the agent folders mounted at install time and rebuild the timeline - no need to re-run those sessions.",
   },
   {
     q: "How do I stop or uninstall?",
-    a: "Stop with docker stop agentlens. Remove stored sessions with docker volume rm agentlens-data if you want a clean slate. Details are in the GitHub README.",
+    a: "Stop with docker stop agentlens. Remove the container with docker rm agentlens (data is kept). Delete stored sessions with docker volume rm agentlens-data. To remove Claude Code hooks only, run the install script with --uninstall-hooks - see the GitHub README.",
   },
 ];
 
