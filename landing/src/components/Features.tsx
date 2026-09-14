@@ -4,24 +4,24 @@ import "./Features.css";
 
 const FEATURES = [
   {
-    title: "Claude Code and Cursor",
-    body: "Live capture via Claude Code hooks, plus import for Cursor transcripts - both agents in one timeline.",
+    title: "Watch the next agent run live",
+    body: "Every prompt, file read, edit, shell command, and search shows up on one timeline as it happens.",
     tone: "ok" as const,
   },
   {
-    title: "Full session timeline",
-    body: "Prompts, reads, edits, shell, and searches in order - so you can see where time went and where the agent got stuck.",
+    title: "Find the loop, not the blame",
+    body: "Scan for thrash, dead ends, and the exact step that burned the time - instead of guessing from a wall of logs.",
     tone: "edit" as const,
   },
   {
-    title: "Local by default",
-    body: "Runs on your machine with Postgres. No cloud account. Your sessions never leave the box.",
-    tone: "cursor" as const,
+    title: "Import history you already have",
+    body: "Bring in past agent sessions and rebuild the timeline - no need to run them again.",
+    tone: "read" as const,
   },
   {
-    title: "Import what you already have",
-    body: "Point AgentLens at existing Claude Code and Cursor transcripts and rebuild history without replaying sessions.",
-    tone: "read" as const,
+    title: "Local. No account. No upload.",
+    body: "Data on your box. Your agent sessions never leave the machine.",
+    tone: "cursor" as const,
   },
 ];
 
@@ -39,11 +39,11 @@ export default function Features() {
           viewport={viewportOnce}
         >
           <motion.h2 className="features__heading" variants={fadeUp}>
-            Built to watch agents work
+            Built for the &ldquo;what the hell was it doing?&rdquo; moment
           </motion.h2>
           <motion.p className="features__sub" variants={fadeUp}>
-            Turn opaque Claude Code and Cursor sessions into an observatory you
-            can scan.
+            Opaque agent sessions become a scannable timeline - live or
+            imported.
           </motion.p>
         </motion.div>
 

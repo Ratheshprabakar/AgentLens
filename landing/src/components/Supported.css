@@ -1,0 +1,92 @@
+.supported {
+  padding: var(--section-y) 0;
+}
+
+.supported__intro {
+  margin-bottom: var(--section-gap);
+}
+
+.supported__heading {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(28px, 4.5vw, 40px);
+  letter-spacing: -0.035em;
+  margin-bottom: 12px;
+}
+
+.supported__sub {
+  color: var(--paper-muted);
+  max-width: 44ch;
+  font-size: 15px;
+}
+
+.supported__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 280px));
+  gap: 16px;
+}
+
+.supported__tile {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 22px;
+  background:
+    linear-gradient(145deg, rgba(200, 245, 66, 0.04), transparent 55%),
+    var(--ink-elevated);
+  border: 1px solid var(--line);
+  transition:
+    border-color var(--ease),
+    background var(--ease);
+}
+
+.supported__tile:hover {
+  border-color: var(--line-strong);
+  background:
+    linear-gradient(145deg, rgba(200, 245, 66, 0.07), transparent 55%),
+    var(--ink-hover);
+}
+
+.supported__mark {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.supported__tile--live .supported__mark {
+  color: var(--agent-claude);
+}
+
+.supported__tile--import .supported__mark {
+  color: var(--agent-cursor);
+}
+
+.supported__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.supported__name {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--paper);
+}
+
+.supported__detail {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--paper-faint);
+}
+
+@media (max-width: 600px) {
+  .supported {
+    padding: var(--section-y-sm) 0;
+  }
+
+  .supported__grid {
+    grid-template-columns: 1fr;
+  }
+}

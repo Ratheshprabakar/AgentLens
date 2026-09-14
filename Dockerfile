@@ -1,5 +1,5 @@
-# Web UI is static JS — build once on the host CPU (avoids QEMU + esbuild crashes).
-# Runtime is multi-arch (bun binary + prod deps per target).
+# Web UI is static JS - build once on the host CPU (avoids QEMU + esbuild crashes).
+# Runtime is multi-arch (bun binary + prod deps + embedded Postgres per target).
 
 FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
 
@@ -15,8 +15,17 @@ COPY tsconfig.json vite.config.ts ./
 COPY web/ ./web/
 RUN pnpm run build:web
 
-# ─── Minimal Bun runtime (per target platform) ────────────────────────────────
+# ─── Bun runtime + embedded Postgres (per target platform) ────────────────────
 FROM oven/bun:1-alpine AS runtime
+
+RUN apk add --no-cache \
+      postgresql \
+      postgresql-contrib \
+      su-exec \
+      curl \
+    && mkdir -p /var/lib/postgresql/data /var/run/postgresql \
+         /claude-projects /cursor-projects \
+    && chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql
 
 WORKDIR /app
 
@@ -29,15 +38,19 @@ RUN bun install --production \
   && find node_modules -type d -name "tests" -prune -exec rm -rf {} + 2>/dev/null || true
 
 COPY src/ ./src/
+COPY docker/ ./docker/
 COPY --from=builder /app/dist/web ./dist/web
-
-RUN mkdir -p /claude-projects /cursor-projects
+RUN chmod +x /app/docker/entrypoint.sh \
+  && ln -sf /app/docker/entrypoint.sh /entrypoint.sh
 
 EXPOSE 4040
 
+VOLUME ["/var/lib/postgresql/data"]
+
 ENV NODE_ENV=production \
     PORT=4040 \
+    PGDATA=/var/lib/postgresql/data \
     CLAUDE_PROJECTS_DIR=/claude-projects \
     CURSOR_PROJECTS_DIR=/cursor-projects
 
-CMD ["bun", "src/cli.ts", "start", "--no-open"]
+ENTRYPOINT ["/entrypoint.sh"]

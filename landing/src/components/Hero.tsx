@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { easeOut, stagger, fadeUp } from "../lib/motion";
+import { installCommand } from "../lib/site";
 import "./Hero.css";
 
-const DOCKER_INSTALL =
-  "curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/scripts/install.sh | bash";
 const GITHUB = "https://github.com/Ratheshprabakar/AgentLens";
+const CURL_INSTALL = installCommand();
 
 export default function Hero() {
   const [copied, setCopied] = useState(false);
@@ -13,7 +13,7 @@ export default function Hero() {
 
   const copyAndJump = async () => {
     try {
-      await navigator.clipboard.writeText(DOCKER_INSTALL);
+      await navigator.clipboard.writeText(CURL_INSTALL);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2200);
     } catch {
@@ -37,11 +37,12 @@ export default function Hero() {
             AgentLens
           </motion.p>
           <motion.h1 className="hero__headline" variants={fadeUp}>
-            See what your coding agent actually did.
+            Your coding agent has a timeline. You just couldn&apos;t see it.
           </motion.h1>
           <motion.p className="hero__sub" variants={fadeUp}>
-            Local DevTools for Claude Code and Cursor - every prompt, file edit,
-            shell command, and search on one timeline.
+            AgentLens is local DevTools for AI coding agents. Every prompt,
+            edit, shell command, and search - in order - so you can see where
+            time went and where it got stuck.
           </motion.p>
           <motion.div className="hero__ctas" variants={fadeUp}>
             <motion.button
@@ -60,7 +61,7 @@ export default function Hero() {
                   exit={{ opacity: 0, y: -6 }}
                   transition={{ duration: 0.18 }}
                 >
-                  {copied ? "Copied - see below" : "Copy install command"}
+                  {copied ? "Copied - paste below" : "Install in one minute"}
                 </motion.span>
               </AnimatePresence>
             </motion.button>
@@ -76,8 +77,7 @@ export default function Hero() {
             </motion.a>
           </motion.div>
           <motion.p className="hero__hint mono" variants={fadeUp}>
-            Copies the Docker one-liner and scrolls to install · data stays on
-            your machine
+            One command · opens in your browser · data stays on your machine
           </motion.p>
         </motion.div>
 
@@ -192,7 +192,7 @@ function ProductMock() {
           />
           <span className="mono">live session</span>
         </span>
-        <span className="mock__title mono">claude · agentlens</span>
+        <span className="mock__title mono">agent · agentlens</span>
       </div>
       <div className="mock__body">
         <AnimatePresence initial={false} mode="popLayout">

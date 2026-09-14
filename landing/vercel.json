@@ -4,5 +4,19 @@
   "buildCommand": "pnpm run build",
   "outputDirectory": "dist",
   "installCommand": "pnpm install",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "headers": [
+    {
+      "source": "/install.sh",
+      "headers": [
+        { "key": "Content-Type", "value": "text/x-shellscript; charset=utf-8" },
+        { "key": "Cache-Control", "value": "public, max-age=60" }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/((?!install\\.sh$).*)",
+      "destination": "/index.html"
+    }
+  ]
 }

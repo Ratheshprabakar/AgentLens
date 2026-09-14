@@ -1,8 +1,11 @@
 import { motion, useScroll, useMotionValueEvent } from "framer-motion";
 import { useState } from "react";
 import Hero from "../components/Hero";
+import Bridge from "../components/Bridge";
 import Features from "../components/Features";
+import Supported from "../components/Supported";
 import Install from "../components/Install";
+import Faq from "../components/Faq";
 import Footer from "../components/Footer";
 import "./Home.css";
 
@@ -29,6 +32,8 @@ export default function Home() {
           </a>
           <nav className="home__nav-links" aria-label="Page">
             <a href="#features">Features</a>
+            <a href="#supported">Supported</a>
+            <a href="#faq">FAQ</a>
             <a href="#install" className="home__nav-cta">
               Install
             </a>
@@ -38,8 +43,11 @@ export default function Home() {
 
       <main id="top">
         <Hero />
+        <Bridge />
         <Features />
+        <Supported />
         <Install />
+        <Faq />
       </main>
 
       <Footer />

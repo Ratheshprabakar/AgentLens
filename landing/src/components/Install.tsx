@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { fadeUp, stagger, viewportOnce } from "../lib/motion";
+import { installCommand } from "../lib/site";
 import "./Install.css";
 
-const DOCKER_INSTALL =
-  "curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/scripts/install.sh | bash";
-const DOCKER_PULL = "docker pull ratheshprabakar/agentlens:v1.0.0";
+const CURL_INSTALL = installCommand();
 
 function CopyBlock({
   label,
@@ -74,15 +73,15 @@ export default function Install() {
           viewport={viewportOnce}
         >
           <motion.h2 className="install__heading" variants={fadeUp}>
-            Install with Docker
+            Install in one minute
           </motion.h2>
           <motion.p className="install__sub" variants={fadeUp}>
-            One command starts Postgres, the dashboard, and Claude Code hooks. Or pull the image
-            from Docker Hub.
+            One command. It pulls the image, starts everything, wires up live
+            capture, and opens the dashboard. You never have to type volume
+            mounts.
           </motion.p>
 
-          <CopyBlock label="One-line install" code={DOCKER_INSTALL} featured />
-          <CopyBlock label="Pull image" code={DOCKER_PULL} />
+          <CopyBlock label="Install" code={CURL_INSTALL} featured />
         </motion.div>
       </div>
     </section>

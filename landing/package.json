@@ -5,9 +5,10 @@
   "type": "module",
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "dev": "pnpm run sync:install; vite",
+    "build": "pnpm run sync:install; tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "sync:install": "node -e \"try{require('fs').copyFileSync('../scripts/install.sh','public/install.sh');console.log('synced public/install.sh')}catch(e){console.log('using committed public/install.sh')}\""
   },
   "dependencies": {
     "framer-motion": "^11.18.0",

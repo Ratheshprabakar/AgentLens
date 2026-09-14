@@ -1,14 +1,19 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# AgentLens - Production compose (end-user install)
+# AgentLens - Production compose (external Postgres)
 #
-# Uses the pre-built image from Docker Hub. No source code required.
+# Prefer single-image run when possible:
+#   docker run -d --name agentlens -p 4040:4040 \
+#     -v agentlens-data:/var/lib/postgresql/data \
+#     -v ~/.claude:/host-claude \
+#     -v ~/.claude/projects:/claude-projects:ro \
+#     -v ~/.cursor/projects:/cursor-projects:ro \
+#     ratheshprabakar/agentlens:latest
 #
-# Quick start:
-#   curl -sSL https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/scripts/install.sh | bash
+# This compose file keeps Postgres in a separate container (DATABASE_URL set,
+# so the app image skips its embedded database).
 #
-# Manual start:
 #   curl -O https://raw.githubusercontent.com/Ratheshprabakar/AgentLens/main/docker-compose.prod.yml
-#   CLAUDE_PROJECTS_DIR=~/.claude/projects docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml up -d
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -32,7 +37,7 @@ services:
 
   # ── AgentLens App (pre-built from Docker Hub) ───────────────────────────────
   app:
-    image: ratheshprabakar/agentlens:latest # ← pulled from Docker Hub, no build step
+    image: ratheshprabakar/agentlens:latest
     container_name: agentlens-app
     restart: unless-stopped
     depends_on:
@@ -41,9 +46,11 @@ services:
     environment:
       DATABASE_URL: postgresql://agentlens:agentlens@postgres:5432/agentlens
       PORT: ${PORT:-4040}
+      AGENTLENS_HOST_PORT: ${PORT:-4040}
       CLAUDE_PROJECTS_DIR: /claude-projects
       CURSOR_PROJECTS_DIR: /cursor-projects
     volumes:
+      - ${CLAUDE_HOME:-~/.claude}:/host-claude
       - ${CLAUDE_PROJECTS_DIR:-~/.claude/projects}:/claude-projects:ro
       - ${CURSOR_PROJECTS_DIR:-~/.cursor/projects}:/cursor-projects:ro
     ports:

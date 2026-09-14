@@ -31,9 +31,11 @@ services:
     environment:
       DATABASE_URL:        postgresql://agentlens:agentlens@postgres:5432/agentlens
       PORT:                4040
+      AGENTLENS_HOST_PORT: ${PORT:-4040}
       CLAUDE_PROJECTS_DIR: /claude-projects
       CURSOR_PROJECTS_DIR: /cursor-projects
     volumes:
+      - ${CLAUDE_HOME:-~/.claude}:/host-claude
       # Mount Claude Code transcript directory (read-only)
       - ${CLAUDE_PROJECTS_DIR:-~/.claude/projects}:/claude-projects:ro
       # Mount Cursor agent transcripts (read-only)
